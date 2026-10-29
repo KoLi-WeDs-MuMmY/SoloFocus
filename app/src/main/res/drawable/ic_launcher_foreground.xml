@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer System HUD Diamond Frame -->
+    <path
+        android:fillColor="#1E88E5"
+        android:pathData="M54,22 L86,54 L54,86 L22,54 Z M54,29 L30,54 L54,79 L78,54 Z" />
+    <!-- Inner Mana Core & Sovereign Blade Crest -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M54,33 L62,48 L57,48 L57,68 L63,72 L54,77 L45,72 L51,68 L51,48 L46,48 Z" />
+    <!-- Corner HUD Brackets -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M26,26 L38,26 L38,30 L30,30 L30,38 L26,38 Z M82,26 L70,26 L70,30 L78,30 L78,38 L82,38 Z M26,82 L38,82 L38,78 L30,78 L30,70 L26,70 Z M82,82 L70,82 L70,78 L78,78 L78,70 L82,70 Z" />
+</vector>

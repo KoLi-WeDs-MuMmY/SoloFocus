@@ -1,0 +1,6 @@
+{
+  "name": "System Focus HUD",
+  "description": "Solo Leveling System HUD Focus Timer, Daily Quest Tracker, and Accessibility Shorts/App Blocker.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

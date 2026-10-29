@@ -1,0 +1,17 @@
+<resources>
+    <string name="app_name">System Focus HUD</string>
+    <string name="accessibility_service_label">System Authority: Focus &amp; Shorts Blocker</string>
+    <string name="accessibility_service_description">Monitors active windows during Dungeon Lock to seal distracting apps, YouTube Shorts, and Instagram Reels.</string>
+    <string name="tab_status_timer">[ STATUS &amp; TIMER ]</string>
+    <string name="tab_daily_quests">[ DAILY QUESTS ]</string>
+    <string name="tab_penalty_seals">[ PENALTY SEALS ]</string>
+    <string name="system_notification_header">[ ! SYSTEM NOTIFICATION ]</string>
+    <string name="daily_quest_header">[ DAILY QUEST: THE PLAYER\'S PREPARATION ]</string>
+    <string name="dungeon_lock_active">[ DUNGEON LOCK: ACTIVE ]</string>
+    <string name="quest_cleared_reward_unlocked">[ QUEST CLEARED: REWARD TIME UNLOCKED ]</string>
+    <string name="level_up_banner">[ LEVEL UP! ]</string>
+    <string name="daily_quest_warning">WARNING: Failure to complete daily quests will keep Distraction Seals locked.</string>
+    <string name="system_authority_header">[ SYSTEM AUTHORITY: ACCESSIBILITY SERVICE ]</string>
+    <string name="seal_youtube_shorts">[ SEAL YOUTUBE SHORTS ]</string>
+    <string name="seal_instagram_reels">[ SEAL INSTAGRAM REELS ]</string>
+</resources>
