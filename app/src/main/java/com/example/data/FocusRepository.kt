@@ -2,6 +2,7 @@ package com.example.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.example.service.FocusShieldForegroundService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -102,6 +103,7 @@ object FocusRepository {
     )
 
     private var prefs: SharedPreferences? = null
+    private var appContext: Context? = null
 
     private val defaultBlockedPackages = setOf(
         "com.google.android.youtube",
@@ -183,12 +185,15 @@ object FocusRepository {
     }
 
     fun init(context: Context) {
-        val sharedPrefs = prefs ?: context.applicationContext
+        val app = context.applicationContext
+        appContext = app
+        val sharedPrefs = prefs ?: app
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .also { prefs = it }
         loadFromPrefs(sharedPrefs)
         checkAndEnforceMidnightQuestReset(sharedPrefs)
         pruneExpiredUnseals()
+        FocusShieldForegroundService.startShield(app)
     }
 
     fun initialize(context: Context) = init(context)
@@ -333,6 +338,7 @@ object FocusRepository {
     }
 
     fun startFocusDungeon() {
+        appContext?.let { FocusShieldForegroundService.startShield(it) }
         val totalSecs = _focusDurationMinutes.value * 60
         val endEpoch = System.currentTimeMillis() + (totalSecs * 1000L)
         _timerPhase.value = TimerPhase.FOCUS_LOCK
@@ -435,6 +441,7 @@ object FocusRepository {
             ?.apply()
 
         if (active) {
+            appContext?.let { FocusShieldForegroundService.startShield(it) }
             _activeBanner.value = SystemAlertBanner(
                 title = "[ FORCE DUNGEON LOCK: ACTIVE ]",
                 message = "Test Mode engaged. Sealed apps (unless Token-unsealed) and Shorts/Reels will trigger the Crimson Overlay."

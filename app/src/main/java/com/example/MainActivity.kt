@@ -82,18 +82,25 @@ import com.example.ui.theme.PenaltyDangerRed
 import com.example.ui.theme.RoyalSystemBlue
 import com.example.ui.theme.SovereignRewardGold
 import com.example.ui.theme.SystemManaCyan
+import com.example.service.FocusShieldForegroundService
 import com.example.ui.theme.SystemWindowSurface
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         FocusRepository.init(applicationContext)
+        FocusShieldForegroundService.startShield(applicationContext)
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme {
                 SystemFocusHudApp()
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        FocusShieldForegroundService.startShield(applicationContext)
     }
 }
 
