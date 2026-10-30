@@ -75,6 +75,9 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
     private val _hasNotificationPermission = MutableStateFlow(true)
     val hasNotificationPermission: StateFlow<Boolean> = _hasNotificationPermission.asStateFlow()
 
+    private val _hasUsageStatsPermission = MutableStateFlow(false)
+    val hasUsageStatsPermission: StateFlow<Boolean> = _hasUsageStatsPermission.asStateFlow()
+
     private val _currentTimeMillis = MutableStateFlow(System.currentTimeMillis())
     val currentTimeMillis: StateFlow<Long> = _currentTimeMillis.asStateFlow()
 
@@ -232,10 +235,12 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         val a11yEnabled = checkAccessibilityEnabled(context)
         val overlayEnabled = checkOverlayPermissionEnabled(context)
         val notifEnabled = SystemAuthorityNotificationHelper.hasNotificationPermission(context)
+        val usageEnabled = checkUsageStatsEnabled(context)
 
         _isAccessibilityServiceEnabled.value = a11yEnabled
         _canDrawOverlays.value = overlayEnabled
         _hasNotificationPermission.value = notifEnabled
+        _hasUsageStatsPermission.value = usageEnabled
         _currentTimeMillis.value = System.currentTimeMillis()
 
         if (notifEnabled) {
@@ -248,6 +253,29 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 SystemAuthorityNotificationHelper.dismissPermissionNotification(context)
             }
+        }
+    }
+
+    private fun checkUsageStatsEnabled(context: Context): Boolean {
+        return try {
+            val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as? android.app.AppOpsManager ?: return false
+            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                appOps.unsafeCheckOpNoThrow(
+                    android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,
+                    android.os.Process.myUid(),
+                    context.packageName
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                appOps.checkOpNoThrow(
+                    android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,
+                    android.os.Process.myUid(),
+                    context.packageName
+                )
+            }
+            mode == android.app.AppOpsManager.MODE_ALLOWED
+        } catch (_: Exception) {
+            false
         }
     }
 

@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Token
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -66,6 +67,7 @@ fun StatusTimerScreen(
     isTimerRunning: Boolean,
     isBlockingActive: Boolean,
     completedDungeons: Int,
+    blockedPackageCount: Int,
     onSelectFocusDuration: (Int) -> Unit,
     onBindQuestToTimer: (String?) -> Unit,
     onStartOrToggleTimer: () -> Unit,
@@ -74,7 +76,6 @@ fun StatusTimerScreen(
     modifier: Modifier = Modifier
 ) {
     val haptic = LocalHapticFeedback.current
-    // Scientifically tuned presets starting at the 5m threshold up to 70m (35m = 100 Tokens = 10m app time)
     val focusRow1 = listOf(5, 15, 25)
     val focusRow2 = listOf(35, 50, 70)
 
@@ -82,22 +83,19 @@ fun StatusTimerScreen(
     val boundQuest = incompleteQuests.find { it.id == boundQuestId }
     val expectedTokens = FocusRepository.calculateTokensForFocusMinutes(focusDurationMinutes)
 
-    val phaseBorderStart = when {
-        timerPhase == TimerPhase.FOCUS_LOCK || isBlockingActive -> PenaltyDangerRed
-        else -> SystemManaCyan
-    }
-    val phaseBorderEnd = when {
-        timerPhase == TimerPhase.FOCUS_LOCK || isBlockingActive -> MonarchShadowPurple
-        else -> RoyalSystemBlue
-    }
+    val isLockActive = timerPhase == TimerPhase.FOCUS_LOCK || isBlockingActive
+    val phaseBorderStart = if (isLockActive) PenaltyDangerRed else SystemManaCyan
+    val phaseBorderEnd = if (isLockActive) MonarchShadowPurple else RoyalSystemBlue
 
     Column(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 1. Main Mana Core Timer System Window
+        // ---------------------------------------------------------
+        // CARD 1: STATUS & ACTIVE FOCUS SESSION CARD
+        // ---------------------------------------------------------
         SystemWindowCard(
             modifier = Modifier
                 .fillMaxWidth()
@@ -108,27 +106,38 @@ fun StatusTimerScreen(
         ) {
             Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                // Focus State Header Row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = when (timerPhase) {
-                            TimerPhase.FOCUS_LOCK -> "[ DUNGEON LOCK: ACTIVE ]"
-                            TimerPhase.REWARD_UNLOCK -> "[ TOKENS DEPOSITED ]"
-                            TimerPhase.IDLE -> "[ ! SYSTEM NOTIFICATION: FOCUS GATE ]"
-                        },
-                        style = MaterialTheme.typography.labelLarge,
-                        color = phaseBorderStart,
-                        fontWeight = FontWeight.Black,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = when (timerPhase) {
+                                TimerPhase.FOCUS_LOCK -> "[ DUNGEON LOCK: ACTIVE ]"
+                                TimerPhase.REWARD_UNLOCK -> "[ TOKENS DEPOSITED ]"
+                                TimerPhase.IDLE -> "[ SYSTEM READY: FOCUS GATE ]"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            color = phaseBorderStart,
+                            fontWeight = FontWeight.Black
+                        )
+                        Text(
+                            text = if (isLockActive) {
+                                "Enforcing Lock on $blockedPackageCount Sealed Apps"
+                            } else {
+                                "$blockedPackageCount Apps Sealed • Ready for Focus Session"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = HudTextSecondary
+                        )
+                    }
 
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
+                    Box(
                         modifier = Modifier
                             .clip(CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp))
                             .background(AbyssalBackground)
@@ -139,25 +148,25 @@ fun StatusTimerScreen(
                             )
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
-                        Icon(
-                            imageVector = if (isBlockingActive) Icons.Default.Lock else Icons.Default.LockOpen,
-                            contentDescription = "Seal Lock Status",
-                            tint = phaseBorderStart,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = if (isBlockingActive) "SEALED" else "STANDBY",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = phaseBorderStart,
-                            fontWeight = FontWeight.Black
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = if (isLockActive) Icons.Default.Lock else Icons.Default.LockOpen,
+                                contentDescription = "Lock State",
+                                tint = phaseBorderStart,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (isLockActive) "LOCKED" else "STANDBY",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = phaseBorderStart,
+                                fontWeight = FontWeight.Black
+                            )
+                        }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Centerpiece Custom Canvas Mana Core Timer
+                // Centerpiece Custom Canvas Mana Core Timer Dial
                 ManaCoreTimerDial(
                     remainingSeconds = remainingSeconds,
                     totalSeconds = totalPhaseSeconds,
@@ -167,19 +176,17 @@ fun StatusTimerScreen(
                     expectedTokenYield = expectedTokens,
                     boundQuestTitle = boundQuest?.title,
                     modifier = Modifier
-                        .size(252.dp)
+                        .size(240.dp)
                         .padding(4.dp)
                 )
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Primary Action Controls
+                // Primary Action Controls (Start / Pause / End)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     val primaryButtonLabel = when {
-                        timerPhase == TimerPhase.IDLE -> "[ ENTER DUNGEON ]"
+                        timerPhase == TimerPhase.IDLE -> "[ ENTER FOCUS DUNGEON ]"
                         isTimerRunning -> "[ PAUSE MANA CORE ]"
                         else -> "[ RESUME MANA CORE ]"
                     }
@@ -211,11 +218,9 @@ fun StatusTimerScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Instant Clear Quest & Deposit Reward Tokens Action (00:00 transition)
+                // Test Shortcut: Instant Clear
                 SystemHudButton(
-                    text = "[ INSTANT CLEAR (00:00 -> +$expectedTokens TOKENS & XP) ]",
+                    text = "[ TEST INSTANT CLEAR (00:00 -> +$expectedTokens TOKENS & XP) ]",
                     onClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         onInstantClearQuest()
@@ -229,7 +234,9 @@ fun StatusTimerScreen(
             }
         }
 
-        // 2. Focus Duration Selectors & Reward Token Rate Card
+        // ---------------------------------------------------------
+        // CARD 2: FOCUS DURATION SELECTORS & TOKEN REWARD FORMULA
+        // ---------------------------------------------------------
         SystemWindowCard(
             modifier = Modifier
                 .fillMaxWidth()
@@ -238,7 +245,10 @@ fun StatusTimerScreen(
             borderEndColor = RoyalSystemBlue,
             contentPadding = 16.dp
         ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -247,18 +257,19 @@ fun StatusTimerScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Default.Token,
-                            contentDescription = "Reward Token Yield",
+                            contentDescription = "Token Reward",
                             tint = SovereignRewardGold,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "[ FOCUS TIME & TOKEN YIELD ]",
+                            text = "[ FOCUS DURATION & TOKEN REWARD ]",
                             style = MaterialTheme.typography.titleMedium,
                             color = SystemManaCyan,
                             fontWeight = FontWeight.Black
                         )
                     }
+
                     Text(
                         text = "CLEARED: $completedDungeons",
                         style = MaterialTheme.typography.labelSmall,
@@ -267,15 +278,13 @@ fun StatusTimerScreen(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Min 5m Focus Threshold • 35m Focus = 100 Tokens (10m Unseal). Spend Tokens per app in [ PENALTY SEALS ].",
+                    text = "Ratio: 35m Focus = 100 Reward Tokens = 10m Unsealed App Time (10 Tokens = 1 min). Minimum 5m Focus threshold required.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = HudTextSecondary
                 )
 
-                Spacer(modifier = Modifier.height(10.dp))
-
+                // Row 1 Duration Chips
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -292,15 +301,12 @@ fun StatusTimerScreen(
                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 onSelectFocusDuration(mins)
                             },
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("focus_duration_${mins}m")
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
-
+                // Row 2 Duration Chips
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -317,16 +323,16 @@ fun StatusTimerScreen(
                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 onSelectFocusDuration(mins)
                             },
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("focus_duration_${mins}m")
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
             }
         }
 
-        // 3. Timer-Quest Binding Window ([ BIND ACTIVE DAILY QUEST ])
+        // ---------------------------------------------------------
+        // CARD 3: TIMER-QUEST BINDING CARD
+        // ---------------------------------------------------------
         SystemWindowCard(
             modifier = Modifier
                 .fillMaxWidth()
@@ -347,7 +353,7 @@ fun StatusTimerScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = if (boundQuest != null) Icons.Default.Link else Icons.Default.LinkOff,
-                            contentDescription = "Bind Quest to Timer",
+                            contentDescription = "Bind Quest",
                             tint = if (boundQuest != null) SovereignRewardGold else MonarchShadowPurple,
                             modifier = Modifier.size(18.dp)
                         )
@@ -371,12 +377,12 @@ fun StatusTimerScreen(
                 }
 
                 Text(
-                    text = "Optionally bind an incomplete Daily Quest to this Focus Timer. Reaching 00:00 auto-completes the quest, grants its XP, and deposits your Reward Tokens.",
+                    text = "Bind an active Daily Quest to this timer. Reaching 00:00 will auto-complete the quest, grant its XP, and deposit your Reward Tokens.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = HudTextSecondary
                 )
 
-                // Unbound option
+                // Unbound Option
                 QuestBindOptionRow(
                     title = "[ NONE — FREE FOCUS DUNGEON ]",
                     subtitle = "Earn +$expectedTokens Reward Tokens & +100 XP without binding a specific quest",
@@ -393,17 +399,17 @@ fun StatusTimerScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp))
+                            .clip(CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp))
                             .background(AbyssalBackground.copy(alpha = 0.75f))
                             .border(
                                 width = 1.dp,
                                 color = HudTextMuted.copy(alpha = 0.4f),
-                                shape = CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp)
+                                shape = CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp)
                             )
                             .padding(12.dp)
                     ) {
                         Text(
-                            text = "No incomplete Daily Quests in your log today. Add a quest in [ DAILY QUESTS ] to bind it here.",
+                            text = "No incomplete Daily Quests found today. Add one in [ DAILY QUESTS ] to bind it here.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = HudTextMuted
                         )
@@ -412,7 +418,7 @@ fun StatusTimerScreen(
                     incompleteQuests.forEach { quest ->
                         QuestBindOptionRow(
                             title = quest.title,
-                            subtitle = "Auto-completes on 00:00 -> +${quest.xpReward} Quest XP + $expectedTokens Tokens",
+                            subtitle = "Auto-completes at 00:00 -> +${quest.xpReward} XP + $expectedTokens Tokens",
                             isSelected = boundQuest?.id == quest.id,
                             accentColor = SovereignRewardGold,
                             onClick = {

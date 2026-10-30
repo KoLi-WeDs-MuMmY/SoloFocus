@@ -128,6 +128,7 @@ fun SystemFocusHudApp(
     val isAccessibilityEnabled by viewModel.isAccessibilityServiceEnabled.collectAsStateWithLifecycle()
     val canDrawOverlays by viewModel.canDrawOverlays.collectAsStateWithLifecycle()
     val hasNotificationPermission by viewModel.hasNotificationPermission.collectAsStateWithLifecycle()
+    val hasUsageStatsPermission by viewModel.hasUsageStatsPermission.collectAsStateWithLifecycle()
     val installedApps by viewModel.installedApps.collectAsStateWithLifecycle()
     val appSearchQuery by viewModel.appSearchQuery.collectAsStateWithLifecycle()
     val lastBlockedEventDescription by viewModel.lastBlockedEventDescription.collectAsStateWithLifecycle()
@@ -287,6 +288,7 @@ fun SystemFocusHudApp(
                             isAccessibilityEnabled = isAccessibilityEnabled,
                             canDrawOverlays = canDrawOverlays,
                             hasNotificationPermission = hasNotificationPermission,
+                            hasUsageStatsPermission = hasUsageStatsPermission,
                             sealYoutubeShorts = sealYoutubeShorts,
                             sealInstagramReels = sealInstagramReels,
                             blockedPackages = blockedPackages,
@@ -294,9 +296,7 @@ fun SystemFocusHudApp(
                             currentTimeMillis = currentTimeMillis,
                             installedApps = installedApps,
                             appSearchQuery = appSearchQuery,
-                            lastBlockedEventDescription = lastBlockedEventDescription,
                             onRequestNotificationPermissionAndSendBar = requestNotificationsAndPostAccessBar,
-                            onOpenPermissionSetupDialog = { forceShowPermissionModal = true },
                             viewModel = viewModel
                         )
                     }
@@ -339,6 +339,7 @@ fun SystemFocusHudApp(
                             isAccessibilityEnabled = isAccessibilityEnabled,
                             canDrawOverlays = canDrawOverlays,
                             hasNotificationPermission = hasNotificationPermission,
+                            hasUsageStatsPermission = hasUsageStatsPermission,
                             sealYoutubeShorts = sealYoutubeShorts,
                             sealInstagramReels = sealInstagramReels,
                             blockedPackages = blockedPackages,
@@ -346,9 +347,7 @@ fun SystemFocusHudApp(
                             currentTimeMillis = currentTimeMillis,
                             installedApps = installedApps,
                             appSearchQuery = appSearchQuery,
-                            lastBlockedEventDescription = lastBlockedEventDescription,
                             onRequestNotificationPermissionAndSendBar = requestNotificationsAndPostAccessBar,
-                            onOpenPermissionSetupDialog = { forceShowPermissionModal = true },
                             viewModel = viewModel
                         )
                     }
@@ -481,6 +480,7 @@ private fun ActiveTabContent(
     isAccessibilityEnabled: Boolean,
     canDrawOverlays: Boolean,
     hasNotificationPermission: Boolean,
+    hasUsageStatsPermission: Boolean,
     sealYoutubeShorts: Boolean,
     sealInstagramReels: Boolean,
     blockedPackages: Set<String>,
@@ -488,9 +488,7 @@ private fun ActiveTabContent(
     currentTimeMillis: Long,
     installedApps: List<com.example.ui.InstalledAppItem>,
     appSearchQuery: String,
-    lastBlockedEventDescription: String?,
     onRequestNotificationPermissionAndSendBar: () -> Unit,
-    onOpenPermissionSetupDialog: () -> Unit,
     viewModel: FocusViewModel
 ) {
     when (selectedTab) {
@@ -505,6 +503,7 @@ private fun ActiveTabContent(
                 isTimerRunning = isTimerRunning,
                 isBlockingActive = isBlockingActive,
                 completedDungeons = completedDungeons,
+                blockedPackageCount = blockedPackages.size,
                 onSelectFocusDuration = viewModel::selectFocusDuration,
                 onBindQuestToTimer = viewModel::bindQuestToTimer,
                 onStartOrToggleTimer = viewModel::startOrToggleDungeonTimer,
@@ -531,6 +530,7 @@ private fun ActiveTabContent(
                 isAccessibilityEnabled = isAccessibilityEnabled,
                 canDrawOverlays = canDrawOverlays,
                 hasNotificationPermission = hasNotificationPermission,
+                hasUsageStatsPermission = hasUsageStatsPermission,
                 rewardTokens = rewardTokens,
                 unsealedAppsExpiryMap = unsealedAppsExpiryMap,
                 currentTimeMillis = currentTimeMillis,
@@ -541,10 +541,8 @@ private fun ActiveTabContent(
                 blockedPackages = blockedPackages,
                 installedApps = installedApps,
                 searchQuery = appSearchQuery,
-                lastBlockedEventDescription = lastBlockedEventDescription,
-                onRefreshAccessibilityStatus = viewModel::refreshAccessibilityStatus,
-                onRequestNotificationPermissionAndSendBar = onRequestNotificationPermissionAndSendBar,
-                onOpenPermissionSetupDialog = onOpenPermissionSetupDialog,
+                onRefreshPermissions = viewModel::refreshAccessibilityStatus,
+                onRequestNotificationPermission = onRequestNotificationPermissionAndSendBar,
                 onRedeemTokensForApp = viewModel::redeemTokensForApp,
                 onToggleForceDungeonLockTestMode = viewModel::setForceDungeonLockTestMode,
                 onToggleSealYoutubeShorts = viewModel::setSealYoutubeShorts,

@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -19,18 +20,23 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.GppBad
-import androidx.compose.material.icons.filled.GppGood
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.QueryStats
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Token
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -41,23 +47,25 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.example.R
 import com.example.data.FocusRepository
 import com.example.ui.InstalledAppItem
 import com.example.ui.components.SystemDurationChip
@@ -79,6 +87,7 @@ fun PenaltySealsScreen(
     isAccessibilityEnabled: Boolean,
     canDrawOverlays: Boolean,
     hasNotificationPermission: Boolean,
+    hasUsageStatsPermission: Boolean,
     rewardTokens: Int,
     unsealedAppsExpiryMap: Map<String, Long>,
     currentTimeMillis: Long,
@@ -89,10 +98,8 @@ fun PenaltySealsScreen(
     blockedPackages: Set<String>,
     installedApps: List<InstalledAppItem>,
     searchQuery: String,
-    lastBlockedEventDescription: String?,
-    onRefreshAccessibilityStatus: () -> Unit,
-    onRequestNotificationPermissionAndSendBar: () -> Unit,
-    onOpenPermissionSetupDialog: () -> Unit,
+    onRefreshPermissions: () -> Unit,
+    onRequestNotificationPermission: () -> Unit,
     onRedeemTokensForApp: (String, String, Int) -> Boolean,
     onToggleForceDungeonLockTestMode: (Boolean) -> Unit,
     onToggleSealYoutubeShorts: (Boolean) -> Unit,
@@ -108,7 +115,7 @@ fun PenaltySealsScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                onRefreshAccessibilityStatus()
+                onRefreshPermissions()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -121,7 +128,7 @@ fun PenaltySealsScreen(
     var selectedExchangePkg by rememberSaveable(sealedAppItems.map { it.packageName }) {
         mutableStateOf(sealedAppItems.firstOrNull()?.packageName.orEmpty())
     }
-    var selectedRedemptionMinutes by rememberSaveable { mutableStateOf(10) }
+    var selectedRedemptionMinutes by rememberSaveable { mutableIntStateOf(10) }
 
     val filteredApps = if (searchQuery.isBlank()) {
         installedApps
@@ -132,15 +139,17 @@ fun PenaltySealsScreen(
         }
     }
 
-    val allAuthoritiesGranted = isAccessibilityEnabled && canDrawOverlays && hasNotificationPermission
+    val allAuthoritiesGranted = isAccessibilityEnabled && canDrawOverlays && hasNotificationPermission && hasUsageStatsPermission
 
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
             .testTag("penalty_seals_list"),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 1. Glowing [ SYSTEM AUTHORITY: ACCESSIBILITY, OVERLAY & NOTIFICATIONS ] Status Card
+        // ---------------------------------------------------------
+        // CARD 1: PERMISSIONS & SYSTEM AUTHORITY SETUP
+        // ---------------------------------------------------------
         item {
             SystemWindowCard(
                 modifier = Modifier
@@ -150,7 +159,11 @@ fun PenaltySealsScreen(
                 borderEndColor = if (allAuthoritiesGranted) RoyalSystemBlue else MonarchShadowPurple,
                 contentPadding = 16.dp
             ) {
-                Column(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Card Title Row
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -161,109 +174,74 @@ fun PenaltySealsScreen(
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(
-                                imageVector = if (allAuthoritiesGranted) {
-                                    Icons.Default.GppGood
-                                } else {
-                                    Icons.Default.GppBad
-                                },
-                                contentDescription = "Accessibility Authority Status",
+                                imageVector = Icons.Default.Shield,
+                                contentDescription = "System Authority",
                                 tint = if (allAuthoritiesGranted) SystemManaCyan else PenaltyDangerRed,
-                                modifier = Modifier.size(24.dp)
+                                modifier = Modifier.size(22.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = stringResource(id = R.string.system_authority_header),
+                                text = "[ SYSTEM AUTHORITY & PERMISSIONS ]",
                                 style = MaterialTheme.typography.titleMedium,
+                                color = if (allAuthoritiesGranted) SystemManaCyan else PenaltyDangerRed,
+                                fontWeight = FontWeight.Black
+                            )
+                        }
+
+                        // Status Pill
+                        Box(
+                            modifier = Modifier
+                                .clip(CutCornerShape(topStart = 4.dp, bottomEnd = 4.dp))
+                                .background(
+                                    if (allAuthoritiesGranted) SystemManaCyan.copy(alpha = 0.15f)
+                                    else PenaltyDangerRed.copy(alpha = 0.15f)
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (allAuthoritiesGranted) SystemManaCyan else PenaltyDangerRed,
+                                    shape = CutCornerShape(topStart = 4.dp, bottomEnd = 4.dp)
+                                )
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = if (allAuthoritiesGranted) "ALL ONLINE" else "ACTION REQUIRED",
+                                style = MaterialTheme.typography.labelSmall,
                                 color = if (allAuthoritiesGranted) SystemManaCyan else PenaltyDangerRed,
                                 fontWeight = FontWeight.Black
                             )
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
-
                     Text(
-                        text = buildString {
-                            append("NOTIFICATIONS: ")
-                            append(if (hasNotificationPermission) "ONLINE" else "LOCKED")
-                            append(" • OVERLAY: ")
-                            append(if (canDrawOverlays) "ONLINE" else "LOCKED")
-                            append(" • ACCESSIBILITY: ")
-                            append(if (isAccessibilityEnabled) "ONLINE" else "LOCKED")
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (allAuthoritiesGranted) SystemManaCyan else PenaltyDangerRed,
-                        fontWeight = FontWeight.Black
-                    )
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    Text(
-                        text = "On Android 13+, side-loaded APKs lock Accessibility & Overlay behind 'Restricted settings'. Tap [ 1. NOTIFICATION ACCESS BAR ] and [ 2. UNLOCK RESTRICTED SETTINGS (APP INFO) ] (top-right ⋮ -> 'Allow restricted settings'), then enable Overlay and Accessibility.",
+                        text = "Grant required Android permissions for real-time app interception, penalty HUD overlay, and foreground monitoring.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = HudTextPrimary
+                        color = HudTextSecondary
                     )
 
-                    if (!lastBlockedEventDescription.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "LAST INTERCEPTION: $lastBlockedEventDescription",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = SovereignRewardGold,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    SystemHudButton(
-                        text = if (hasNotificationPermission) {
-                            "[ 1. SEND PERMISSION ACCESS NOTIFICATION ]"
-                        } else {
-                            "[ 1. GRANT NOTIFICATIONS FOR PERMISSION ACCESS ]"
-                        },
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onRequestNotificationPermissionAndSendBar()
-                        },
-                        primaryColor = if (hasNotificationPermission) SystemManaCyan else SovereignRewardGold,
-                        secondaryColor = RoyalSystemBlue,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("notification_permission_button")
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    SystemHudButton(
-                        text = "[ 2. UNLOCK RESTRICTED SETTINGS (APP INFO ⋮) ]",
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            val intent = Intent(
-                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                Uri.parse("package:${context.packageName}")
-                            ).apply {
+                    // 1. Accessibility Service Row
+                    PermissionIndicatorRow(
+                        icon = Icons.Default.Security,
+                        title = "Accessibility Service",
+                        subtitle = "Real-time app intercept & Shorts/Reels shield",
+                        isGranted = isAccessibilityEnabled,
+                        actionLabel = "ENABLE",
+                        onClickAction = {
+                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             }
                             context.startActivity(intent)
                         },
-                        primaryColor = MonarchShadowPurple,
-                        secondaryColor = SystemManaCyan,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("unlock_restricted_settings_button")
+                        testTag = "enable_accessibility_button"
                     )
 
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    SystemHudButton(
-                        text = if (canDrawOverlays) {
-                            "[ 3. DISPLAY OVER OTHER APPS: ONLINE ]"
-                        } else {
-                            "[ 3. GRANT DISPLAY OVER OTHER APPS ]"
-                        },
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    // 2. Display Over Other Apps (Overlay) Row
+                    PermissionIndicatorRow(
+                        icon = Icons.Default.Layers,
+                        title = "Display Over Other Apps",
+                        subtitle = "Full-screen penalty HUD over restricted apps",
+                        isGranted = canDrawOverlays,
+                        actionLabel = "ENABLE",
+                        onClickAction = {
                             val intent = Intent(
                                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                                 Uri.parse("package:${context.packageName}")
@@ -272,54 +250,161 @@ fun PenaltySealsScreen(
                             }
                             context.startActivity(intent)
                         },
-                        primaryColor = if (canDrawOverlays) SystemManaCyan else SovereignRewardGold,
-                        secondaryColor = MonarchShadowPurple,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("overlay_settings_button")
+                        testTag = "enable_overlay_button"
                     )
 
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    SystemHudButton(
-                        text = if (isAccessibilityEnabled) {
-                            "[ 4. ACCESSIBILITY SERVICE: ONLINE ]"
-                        } else {
-                            "[ 4. GRANT ACCESSIBILITY SERVICE ]"
-                        },
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                    // 3. Usage Access Row
+                    PermissionIndicatorRow(
+                        icon = Icons.Default.QueryStats,
+                        title = "Usage Access",
+                        subtitle = "Foreground application telemetry monitor",
+                        isGranted = hasUsageStatsPermission,
+                        actionLabel = "ENABLE",
+                        onClickAction = {
+                            val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             }
                             context.startActivity(intent)
                         },
-                        primaryColor = if (isAccessibilityEnabled) SystemManaCyan else PenaltyDangerRed,
-                        secondaryColor = RoyalSystemBlue,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("accessibility_settings_button")
+                        testTag = "enable_usage_stats_button"
                     )
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    // 4. Notifications Row
+                    PermissionIndicatorRow(
+                        icon = Icons.Default.Notifications,
+                        title = "Notification Authority",
+                        subtitle = "Lock status bar & background alert updates",
+                        isGranted = hasNotificationPermission,
+                        actionLabel = "ENABLE",
+                        onClickAction = onRequestNotificationPermission,
+                        testTag = "enable_notifications_button"
+                    )
 
-                    SystemHudButton(
-                        text = "[ OPEN FULL PERMISSION CHECKLIST MODAL ]",
-                        onClick = {
+                    // Android 13+ Restricted Settings Helper
+                    if (!isAccessibilityEnabled || !canDrawOverlays) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp))
+                                .background(MonarchShadowPurple.copy(alpha = 0.12f))
+                                .border(
+                                    width = 1.dp,
+                                    color = MonarchShadowPurple.copy(alpha = 0.4f),
+                                    shape = CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp)
+                                )
+                                .padding(10.dp)
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "Android 13+ Note: If toggles are grayed out, open App Info -> tap top-right menu (⋮) -> 'Allow restricted settings'.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = HudTextPrimary
+                                )
+                                SystemHudButton(
+                                    text = "[ OPEN APP INFO TO UNLOCK RESTRICTED SETTINGS ]",
+                                    onClick = {
+                                        val intent = Intent(
+                                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                            Uri.parse("package:${context.packageName}")
+                                        ).apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                        context.startActivity(intent)
+                                    },
+                                    primaryColor = MonarchShadowPurple,
+                                    secondaryColor = SystemManaCyan,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("app_info_restricted_button")
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---------------------------------------------------------
+        // CARD 2: FEED SHIELDS & TEST CONTROLS
+        // ---------------------------------------------------------
+        item {
+            SystemWindowCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("content_shields_card"),
+                borderStartColor = SystemManaCyan,
+                borderEndColor = MonarchShadowPurple,
+                contentPadding = 16.dp
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.VideoLibrary,
+                            contentDescription = "Content Shields",
+                            tint = SystemManaCyan,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "[ SHORT-FORM FEED SHIELDS & TEST ]",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = SystemManaCyan,
+                            fontWeight = FontWeight.Black
+                        )
+                    }
+
+                    // YouTube Shorts Shield
+                    FeedShieldToggleRow(
+                        title = "YouTube Shorts Shield",
+                        description = "Intercepts Shorts player and kicks back to feed",
+                        isChecked = sealYoutubeShorts,
+                        onCheckedChange = {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            onOpenPermissionSetupDialog()
+                            onToggleSealYoutubeShorts(it)
                         },
-                        primaryColor = SystemManaCyan,
-                        secondaryColor = RoyalSystemBlue,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("open_permission_modal_button")
+                        activeColor = SystemManaCyan,
+                        testTag = "youtube_shorts_switch"
+                    )
+
+                    // Instagram Reels Shield
+                    FeedShieldToggleRow(
+                        title = "Instagram Reels Shield",
+                        description = "Intercepts Reels player and kicks back to feed",
+                        isChecked = sealInstagramReels,
+                        onCheckedChange = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onToggleSealInstagramReels(it)
+                        },
+                        activeColor = MonarchShadowPurple,
+                        testTag = "instagram_reels_switch"
+                    )
+
+                    // Force Dungeon Lock (Test Mode)
+                    FeedShieldToggleRow(
+                        title = "Force Dungeon Lock (Test Mode)",
+                        description = "Enforces instant app blocking immediately without active timer",
+                        isChecked = forceDungeonLockTestMode,
+                        onCheckedChange = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onToggleForceDungeonLockTestMode(it)
+                        },
+                        activeColor = PenaltyDangerRed,
+                        testTag = "force_dungeon_lock_switch"
                     )
                 }
             }
         }
 
-        // 2. [ TOKEN EXCHANGE: PER-APP TEMPORARY UNSEAL ] System Window
+        // ---------------------------------------------------------
+        // CARD 3: REWARD TOKEN EXCHANGE TERMINAL
+        // ---------------------------------------------------------
         item {
             SystemWindowCard(
                 modifier = Modifier
@@ -347,7 +432,7 @@ fun PenaltySealsScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "[ TOKEN EXCHANGE: APP UNSEAL ]",
+                                text = "[ REWARD TOKEN EXCHANGE ]",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = SovereignRewardGold,
                                 fontWeight = FontWeight.Black
@@ -356,508 +441,496 @@ fun PenaltySealsScreen(
 
                         Text(
                             text = "VAULT: $rewardTokens TOKENS",
-                            style = MaterialTheme.typography.labelLarge,
+                            style = MaterialTheme.typography.labelMedium,
                             color = SovereignRewardGold,
                             fontWeight = FontWeight.Black
                         )
                     }
 
                     Text(
-                        text = "Fixed Exchange Rate: 10 Tokens = 1 Minute (100T = 10m up to 600T = 60m). Unseals ONLY the selected app while all other sealed apps remain locked. Repeat transactions stack with no cap.",
+                        text = "Exchange Rate: 10 Tokens = 1 Minute of App Usability. Unseals ONLY the selected app while all other sealed apps remain locked.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = HudTextSecondary
                     )
 
                     if (sealedAppItems.isEmpty()) {
                         Text(
-                            text = "No apps are currently sealed. Seal apps below to manage per-app Token passes.",
-                            style = MaterialTheme.typography.bodyMedium,
+                            text = "No apps currently sealed. Toggle packages below to enable per-app Token passes.",
+                            style = MaterialTheme.typography.bodySmall,
                             color = HudTextMuted
                         )
                     } else {
+                        // App selection chips
                         Text(
-                            text = "1. SELECT SEALED TARGET APP TO UNSEAL:",
+                            text = "SELECT APP TO UNSEAL:",
                             style = MaterialTheme.typography.labelSmall,
                             color = SystemManaCyan,
                             fontWeight = FontWeight.Bold
                         )
 
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            sealedAppItems.forEach { app ->
-                                val isTargetSelected = selectedExchangePkg == app.packageName
-                                val expiryMs = unsealedAppsExpiryMap[app.packageName] ?: 0L
-                                val remainingMs = (expiryMs - currentTimeMillis).coerceAtLeast(0L)
-                                val isCurrentlyUnsealed = remainingMs > 0L
-                                val remMins = (remainingMs / 60_000L).toInt()
-                                val remSecs = ((remainingMs % 60_000L) / 1000L).toInt()
-
-                                val rowShape = CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp)
-                                Row(
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            sealedAppItems.take(3).forEach { app ->
+                                val isSelected = selectedExchangePkg == app.packageName
+                                val shape = CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp)
+                                Box(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(rowShape)
+                                        .weight(1f)
+                                        .clip(shape)
                                         .background(
-                                            when {
-                                                isCurrentlyUnsealed -> SovereignRewardGold.copy(alpha = 0.16f)
-                                                isTargetSelected -> SystemManaCyan.copy(alpha = 0.16f)
-                                                else -> AbyssalBackground.copy(alpha = 0.8f)
-                                            },
-                                            rowShape
+                                            if (isSelected) SovereignRewardGold.copy(alpha = 0.2f)
+                                            else SystemWindowSurfaceElevated
                                         )
                                         .border(
-                                            width = if (isTargetSelected || isCurrentlyUnsealed) 1.5.dp else 1.dp,
-                                            color = when {
-                                                isCurrentlyUnsealed -> SovereignRewardGold
-                                                isTargetSelected -> SystemManaCyan
-                                                else -> HudTextMuted.copy(alpha = 0.4f)
-                                            },
-                                            shape = rowShape
+                                            width = if (isSelected) 1.5.dp else 1.dp,
+                                            color = if (isSelected) SovereignRewardGold else HudTextMuted.copy(alpha = 0.3f),
+                                            shape = shape
                                         )
-                                        .clickable {
-                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                            selectedExchangePkg = app.packageName
-                                        }
-                                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                                        .testTag("exchange_select_app_${app.packageName}"),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                        .clickable { selectedExchangePkg = app.packageName }
+                                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = app.appName,
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            color = if (isTargetSelected) SystemManaCyan else HudTextPrimary,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Text(
-                                            text = app.packageName,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = HudTextSecondary
-                                        )
-                                    }
-
                                     Text(
-                                        text = if (isCurrentlyUnsealed) {
-                                            "UNSEALED (%02d:%02d)".format(remMins, remSecs)
-                                        } else {
-                                            "SEALED"
-                                        },
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = if (isCurrentlyUnsealed) SovereignRewardGold else PenaltyDangerRed,
-                                        fontWeight = FontWeight.Black
+                                        text = app.appName,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = if (isSelected) SovereignRewardGold else HudTextPrimary,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(4.dp))
-
+                        // Duration Tier Chips
                         Text(
-                            text = "2. SELECT FIXED PASS DURATION (10m MULTIPLES UP TO 60m):",
+                            text = "SELECT UNSEAL DURATION:",
                             style = MaterialTheme.typography.labelSmall,
                             color = SystemManaCyan,
                             fontWeight = FontWeight.Bold
                         )
 
-                        val tiersRow1 = FocusRepository.TOKEN_REDEMPTION_TIERS.take(3)
-                        val tiersRow2 = FocusRepository.TOKEN_REDEMPTION_TIERS.drop(3)
-
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            tiersRow1.forEach { tier ->
+                            FocusRepository.TOKEN_REDEMPTION_TIERS.take(4).forEach { tier ->
                                 SystemDurationChip(
                                     label = "${tier.minutes}m",
-                                    subLabel = "${tier.tokenCost} TOKENS",
+                                    subLabel = "${tier.tokenCost}T",
                                     isSelected = selectedRedemptionMinutes == tier.minutes,
                                     enabled = true,
                                     activeColor = SovereignRewardGold,
-                                    onClick = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        selectedRedemptionMinutes = tier.minutes
-                                    },
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("token_tier_${tier.minutes}m")
+                                    onClick = { selectedRedemptionMinutes = tier.minutes },
+                                    modifier = Modifier.weight(1f)
                                 )
                             }
                         }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            tiersRow2.forEach { tier ->
-                                SystemDurationChip(
-                                    label = "${tier.minutes}m",
-                                    subLabel = "${tier.tokenCost} TOKENS",
-                                    isSelected = selectedRedemptionMinutes == tier.minutes,
-                                    enabled = true,
-                                    activeColor = SovereignRewardGold,
-                                    onClick = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        selectedRedemptionMinutes = tier.minutes
-                                    },
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("token_tier_${tier.minutes}m")
-                                )
-                            }
-                        }
-
-                        val targetAppObj = sealedAppItems.find { it.packageName == selectedExchangePkg }
-                            ?: sealedAppItems.first()
-                        val requiredCost = selectedRedemptionMinutes * FocusRepository.TOKENS_PER_APP_MINUTE
-                        val canAfford = rewardTokens >= requiredCost
+                        val selectedTier = FocusRepository.TOKEN_REDEMPTION_TIERS.find { it.minutes == selectedRedemptionMinutes }
+                            ?: FocusRepository.TOKEN_REDEMPTION_TIERS.first()
+                        val canAfford = rewardTokens >= selectedTier.tokenCost
 
                         SystemHudButton(
                             text = if (canAfford) {
-                                "[ UNSEAL ${targetAppObj.appName.uppercase()} FOR ${selectedRedemptionMinutes}m (-$requiredCost TOKENS) ]"
+                                "[ UNSEAL FOR ${selectedTier.minutes}m (${selectedTier.tokenCost} TOKENS) ]"
                             } else {
-                                "[ NEED $requiredCost TOKENS TO UNSEAL ${targetAppObj.appName.uppercase()} (${selectedRedemptionMinutes}m) ]"
+                                "[ INSUFFICIENT TOKENS (NEED ${selectedTier.tokenCost}T) ]"
                             },
-                            enabled = canAfford,
                             onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onRedeemTokensForApp(
-                                    targetAppObj.packageName,
-                                    targetAppObj.appName,
-                                    selectedRedemptionMinutes
-                                )
+                                if (selectedExchangePkg.isNotBlank() && canAfford) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    val targetApp = sealedAppItems.find { it.packageName == selectedExchangePkg }
+                                    onRedeemTokensForApp(
+                                        selectedExchangePkg,
+                                        targetApp?.appName ?: selectedExchangePkg,
+                                        selectedTier.minutes
+                                    )
+                                }
                             },
-                            primaryColor = SovereignRewardGold,
+                            primaryColor = if (canAfford) SovereignRewardGold else HudTextMuted,
                             secondaryColor = SystemManaCyan,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .testTag("redeem_tokens_unseal_button")
+                                .testTag("redeem_tokens_button")
                         )
                     }
                 }
             }
         }
 
-        // 3. Short-Form Video & [ FORCE DUNGEON LOCK (TEST MODE) ] Seals Card
+        // ---------------------------------------------------------
+        // CARD 4: APP SELECTOR & RULE MANAGER (SEALED PACKAGES LIST)
+        // ---------------------------------------------------------
         item {
             SystemWindowCard(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("short_form_seals_card"),
-                borderStartColor = PenaltyDangerRed,
-                borderEndColor = MonarchShadowPurple,
-                contentPadding = 16.dp
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.VideoLibrary,
-                            contentDescription = "Short-Form Video Seals",
-                            tint = PenaltyDangerRed,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "[ SHORT-FORM FEED & DUNGEON SEALS ]",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = PenaltyDangerRed,
-                            fontWeight = FontWeight.Black
-                        )
-                    }
-
-                    SystemSealToggleRow(
-                        title = "[ FORCE DUNGEON LOCK (TEST MODE) ]",
-                        subtitle = "Immediately arm Dungeon Lock to test the 3-second Crimson Overlay kick-out right now.",
-                        checked = forceDungeonLockTestMode || isBlockingActive,
-                        onCheckedChange = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onToggleForceDungeonLockTestMode(it)
-                        },
-                        testTag = "force_dungeon_lock_switch"
-                    )
-
-                    SystemSealToggleRow(
-                        title = stringResource(id = R.string.seal_youtube_shorts),
-                        subtitle = "Detects 'reel_player' / 'shorts_' and triggers GLOBAL_ACTION_BACK + Crimson Overlay.",
-                        checked = sealYoutubeShorts,
-                        onCheckedChange = {
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            onToggleSealYoutubeShorts(it)
-                        },
-                        testTag = "seal_youtube_shorts_switch"
-                    )
-
-                    SystemSealToggleRow(
-                        title = stringResource(id = R.string.seal_instagram_reels),
-                        subtitle = "Detects 'clips_viewer' / 'reel_viewer' and triggers GLOBAL_ACTION_BACK + Crimson Overlay.",
-                        checked = sealInstagramReels,
-                        onCheckedChange = {
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            onToggleSealInstagramReels(it)
-                        },
-                        testTag = "seal_instagram_reels_switch"
-                    )
-                }
-            }
-        }
-
-        // 4. Installed-App Blocker List Header & Search
-        item {
-            SystemWindowCard(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("installed_apps_header_card"),
+                    .testTag("app_selector_manager_card"),
                 borderStartColor = SystemManaCyan,
                 borderEndColor = RoyalSystemBlue,
                 contentPadding = 16.dp
             ) {
-                Column(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.Security,
-                                contentDescription = "Sealed Apps",
-                                tint = SystemManaCyan,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "[ INSTALLED APP PENALTY SEALS ]",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = SystemManaCyan,
-                                fontWeight = FontWeight.Black
-                            )
-                        }
-
                         Text(
-                            text = "${blockedPackages.size} SEALED",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = PenaltyDangerRed,
+                            text = "[ APP SELECTOR & RULE MANAGER ]",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = SystemManaCyan,
                             fontWeight = FontWeight.Black
+                        )
+                        Text(
+                            text = "SEALED: ${blockedPackages.size}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (blockedPackages.isNotEmpty()) PenaltyDangerRed else HudTextMuted,
+                            fontWeight = FontWeight.Bold
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Sealed apps are blocked during Dungeon Lock unless individually unsealed in the Token Exchange above.",
+                        text = "Toggle target applications to seal during Focus Dungeons. Intercepted apps trigger the full-screen System Penalty HUD.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = HudTextSecondary
                     )
 
-                    Spacer(modifier = Modifier.height(10.dp))
-
+                    // Search Input Field
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = onSearchQueryChange,
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.Search,
-                                contentDescription = "Search Installed Apps",
-                                tint = SystemManaCyan
-                            )
-                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("app_search_field"),
                         placeholder = {
                             Text(
-                                text = "Filter installed apps or package names...",
+                                "Search installed apps...",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = HudTextMuted
                             )
                         },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Search,
+                                contentDescription = "Search",
+                                tint = SystemManaCyan,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(onClick = { onSearchQueryChange("") }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Clear,
+                                        contentDescription = "Clear search",
+                                        tint = HudTextMuted
+                                    )
+                                }
+                            }
+                        },
                         singleLine = true,
-                        shape = CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = SystemManaCyan,
-                            unfocusedBorderColor = RoyalSystemBlue.copy(alpha = 0.6f),
-                            focusedContainerColor = AbyssalBackground,
-                            unfocusedContainerColor = AbyssalBackground,
+                            unfocusedBorderColor = HudTextMuted.copy(alpha = 0.4f),
                             focusedTextColor = HudTextPrimary,
                             unfocusedTextColor = HudTextPrimary,
                             cursorColor = SystemManaCyan
                         ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("installed_apps_search_input")
+                        shape = CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp)
                     )
                 }
             }
         }
 
-        // 5. Installed-App Blocker Rows
-        items(items = filteredApps, key = { it.packageName }) { appItem ->
-            val isSealed = blockedPackages.contains(appItem.packageName)
-            val expiryMs = unsealedAppsExpiryMap[appItem.packageName] ?: 0L
+        // Installed App Items
+        items(
+            items = filteredApps,
+            key = { it.packageName }
+        ) { app ->
+            val isSealed = blockedPackages.contains(app.packageName)
+            val expiryMs = unsealedAppsExpiryMap[app.packageName] ?: 0L
             val remainingMs = (expiryMs - currentTimeMillis).coerceAtLeast(0L)
-            val isTemporarilyUnsealed = isSealed && remainingMs > 0L
+            val isCurrentlyUnsealed = remainingMs > 0L
             val remMins = (remainingMs / 60_000L).toInt()
-            val remSecs = ((remainingMs % 60_000L) / 1000L).toInt()
 
-            val shape = CutCornerShape(topStart = 10.dp, bottomEnd = 10.dp)
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(shape)
-                    .background(
-                        when {
-                            isTemporarilyUnsealed -> SovereignRewardGold.copy(alpha = 0.14f)
-                            isSealed -> PenaltyDangerRed.copy(alpha = 0.12f)
-                            else -> SystemWindowSurfaceElevated.copy(alpha = 0.85f)
-                        },
-                        shape
-                    )
-                    .border(
-                        width = 1.2.dp,
-                        color = when {
-                            isTemporarilyUnsealed -> SovereignRewardGold
-                            isSealed -> PenaltyDangerRed
-                            else -> RoyalSystemBlue.copy(alpha = 0.45f)
-                        },
-                        shape = shape
-                    )
-                    .clickable {
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        onToggleBlockedPackage(appItem.packageName)
-                    }
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
-                    .testTag("app_seal_row_${appItem.packageName}"),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp))
-                            .background(AbyssalBackground)
-                            .border(
-                                width = 1.dp,
-                                color = when {
-                                    isTemporarilyUnsealed -> SovereignRewardGold
-                                    isSealed -> PenaltyDangerRed
-                                    else -> SystemManaCyan
-                                },
-                                shape = CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp)
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = if (isSealed && !isTemporarilyUnsealed) {
-                                Icons.Default.Lock
-                            } else {
-                                Icons.Default.LockOpen
-                            },
-                            contentDescription = if (isSealed) "App Sealed" else "App Unsealed",
-                            tint = when {
-                                isTemporarilyUnsealed -> SovereignRewardGold
-                                isSealed -> PenaltyDangerRed
-                                else -> SystemManaCyan
-                            },
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = appItem.appName,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = HudTextPrimary,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = if (isTemporarilyUnsealed) {
-                                "TOKEN PASS ACTIVE: %02d:%02d REMAINING".format(remMins, remSecs)
-                            } else {
-                                appItem.packageName
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (isTemporarilyUnsealed) SovereignRewardGold else HudTextSecondary
-                        )
-                    }
+            AppBlockerItemRow(
+                app = app,
+                isSealed = isSealed,
+                isCurrentlyUnsealed = isCurrentlyUnsealed,
+                unsealedMinutesLeft = remMins,
+                onToggle = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onToggleBlockedPackage(app.packageName)
                 }
-
-                Switch(
-                    checked = isSealed,
-                    onCheckedChange = {
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        onToggleBlockedPackage(appItem.packageName)
-                    },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = AbyssalBackground,
-                        checkedTrackColor = PenaltyDangerRed,
-                        uncheckedThumbColor = SystemManaCyan,
-                        uncheckedTrackColor = AbyssalBackground,
-                        uncheckedBorderColor = SystemManaCyan
-                    ),
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .testTag("app_seal_switch_${appItem.packageName}")
-                )
-            }
+            )
         }
     }
 }
 
 @Composable
-private fun SystemSealToggleRow(
+private fun PermissionIndicatorRow(
+    icon: ImageVector,
     title: String,
     subtitle: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
+    isGranted: Boolean,
+    actionLabel: String,
+    onClickAction: () -> Unit,
     testTag: String
 ) {
-    val shape = CutCornerShape(topStart = 10.dp, bottomEnd = 10.dp)
+    val rowShape = CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(rowShape)
+            .background(
+                if (isGranted) SystemManaCyan.copy(alpha = 0.08f)
+                else PenaltyDangerRed.copy(alpha = 0.08f)
+            )
+            .border(
+                width = 1.dp,
+                color = if (isGranted) SystemManaCyan.copy(alpha = 0.4f)
+                else PenaltyDangerRed.copy(alpha = 0.4f),
+                shape = rowShape
+            )
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = title,
+                tint = if (isGranted) SystemManaCyan else PenaltyDangerRed,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = HudTextPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = HudTextSecondary
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
+
+        if (isGranted) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(CutCornerShape(topStart = 4.dp, bottomEnd = 4.dp))
+                    .background(SystemManaCyan.copy(alpha = 0.2f))
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = "Active",
+                    tint = SystemManaCyan,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "ONLINE",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SystemManaCyan,
+                    fontWeight = FontWeight.Black
+                )
+            }
+        } else {
+            SystemHudButton(
+                text = actionLabel,
+                onClick = onClickAction,
+                primaryColor = PenaltyDangerRed,
+                secondaryColor = MonarchShadowPurple,
+                modifier = Modifier.testTag(testTag)
+            )
+        }
+    }
+}
+
+@Composable
+private fun FeedShieldToggleRow(
+    title: String,
+    description: String,
+    isChecked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    activeColor: Color,
+    testTag: String
+) {
+    val shape = CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(AbyssalBackground.copy(alpha = 0.85f), shape)
+            .background(SystemWindowSurfaceElevated.copy(alpha = 0.7f))
             .border(
-                width = 1.2.dp,
-                color = if (checked) PenaltyDangerRed else RoyalSystemBlue.copy(alpha = 0.5f),
+                width = 1.dp,
+                color = if (isChecked) activeColor.copy(alpha = 0.6f) else HudTextMuted.copy(alpha = 0.3f),
                 shape = shape
             )
-            .clickable { onCheckedChange(!checked) }
             .padding(horizontal = 12.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.titleMedium,
-                color = if (checked) PenaltyDangerRed else SystemManaCyan,
-                fontWeight = FontWeight.Black
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (isChecked) activeColor else HudTextPrimary,
+                fontWeight = FontWeight.Bold
             )
-            Spacer(modifier = Modifier.height(2.dp))
             Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodyMedium,
+                text = description,
+                style = MaterialTheme.typography.labelSmall,
                 color = HudTextSecondary
             )
         }
-        Spacer(modifier = Modifier.width(8.dp))
+        Spacer(modifier = Modifier.width(10.dp))
         Switch(
-            checked = checked,
+            checked = isChecked,
             onCheckedChange = onCheckedChange,
             colors = SwitchDefaults.colors(
-                checkedThumbColor = AbyssalBackground,
-                checkedTrackColor = PenaltyDangerRed,
-                uncheckedThumbColor = SystemManaCyan,
-                uncheckedTrackColor = AbyssalBackground,
-                uncheckedBorderColor = SystemManaCyan
+                checkedThumbColor = activeColor,
+                checkedTrackColor = activeColor.copy(alpha = 0.3f),
+                uncheckedThumbColor = HudTextMuted,
+                uncheckedTrackColor = AbyssalBackground
             ),
+            modifier = Modifier.testTag(testTag)
+        )
+    }
+}
+
+@Composable
+private fun AppBlockerItemRow(
+    app: InstalledAppItem,
+    isSealed: Boolean,
+    isCurrentlyUnsealed: Boolean,
+    unsealedMinutesLeft: Int,
+    onToggle: () -> Unit
+) {
+    val cardShape = CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .minimumInteractiveComponentSize()
+            .clip(cardShape)
+            .background(
+                if (isSealed) PenaltyDangerRed.copy(alpha = 0.08f)
+                else SystemWindowSurfaceElevated.copy(alpha = 0.6f)
+            )
+            .border(
+                width = if (isSealed) 1.2.dp else 1.dp,
+                color = if (isSealed) PenaltyDangerRed.copy(alpha = 0.6f)
+                else HudTextMuted.copy(alpha = 0.25f),
+                shape = cardShape
+            )
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .testTag("app_row_${app.packageName}"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        // App Monogram
+        Box(
             modifier = Modifier
-                .minimumInteractiveComponentSize()
-                .testTag(testTag)
+                .size(40.dp)
+                .clip(CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp))
+                .background(
+                    if (isSealed) PenaltyDangerRed.copy(alpha = 0.2f)
+                    else SystemManaCyan.copy(alpha = 0.15f)
+                )
+                .border(
+                    width = 1.dp,
+                    color = if (isSealed) PenaltyDangerRed else SystemManaCyan,
+                    shape = CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp)
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = app.appName.take(1).uppercase(),
+                style = MaterialTheme.typography.titleMedium,
+                color = if (isSealed) PenaltyDangerRed else SystemManaCyan,
+                fontWeight = FontWeight.Black
+            )
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = app.appName,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (isSealed) Color.White else HudTextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (app.isPresetTarget) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(CutCornerShape(topStart = 3.dp, bottomEnd = 3.dp))
+                            .background(MonarchShadowPurple.copy(alpha = 0.25f))
+                            .padding(horizontal = 5.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "PRESET",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MonarchShadowPurple,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            Text(
+                text = app.packageName,
+                style = MaterialTheme.typography.labelSmall,
+                color = HudTextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            if (isCurrentlyUnsealed) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "UNSEALED PASS: ${unsealedMinutesLeft}m remaining",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SovereignRewardGold,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
+
+        Switch(
+            checked = isSealed,
+            onCheckedChange = { onToggle() },
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = PenaltyDangerRed,
+                checkedTrackColor = PenaltyDangerRed.copy(alpha = 0.35f),
+                uncheckedThumbColor = HudTextMuted,
+                uncheckedTrackColor = AbyssalBackground
+            ),
+            modifier = Modifier.testTag("switch_${app.packageName}")
         )
     }
 }

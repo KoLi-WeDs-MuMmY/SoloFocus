@@ -23,6 +23,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import com.example.data.FocusRepository
+import com.example.ui.BlockerActivity
 
 class FocusBlockerService : AccessibilityService() {
 
@@ -37,8 +38,6 @@ class FocusBlockerService : AccessibilityService() {
         FocusRepository.init(applicationContext)
         cachedHomePackage = resolveDefaultHomeLauncherPackage()
 
-        // Explicitly configure AccessibilityServiceInfo at runtime with packageNames = null
-        // so TYPE_WINDOW_STATE_CHANGED and TYPE_WINDOW_CONTENT_CHANGED fire across ALL OS apps
         try {
             val info = serviceInfo ?: AccessibilityServiceInfo()
             info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
@@ -54,66 +53,69 @@ class FocusBlockerService : AccessibilityService() {
             info.packageNames = null // Listen globally across all installed packages
             serviceInfo = info
         } catch (_: Exception) {
-            // Fallback to XML metadata configuration if OEM restricts runtime setServiceInfo
+            // Fallback to XML configuration if OEM restricts runtime update
         }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
 
-        // Ensure live SharedPreferences and StateFlow sync even if main UI is closed
+        val eventPkg = event.packageName?.toString()?.trim()
+        if (eventPkg.isNullOrBlank()) return
+
+        // 1. RECURSION GUARD: If the event originates from our own application or BlockerActivity,
+        // NEVER trigger blocking!
+        val ownPackage = applicationContext.packageName
+        if (eventPkg == ownPackage ||
+            eventPkg == "com.example" ||
+            eventPkg.startsWith("com.aistudio.systemfocus") ||
+            eventPkg.contains("systemfocus", ignoreCase = true)
+        ) {
+            return
+        }
+
+        // 2. SYSTEM GUARDS: Never block System UI, Settings, Permission Controller, Keyboard, or Home Launcher
+        if (isExemptSystemOrSelfPackage(eventPkg)) {
+            return
+        }
+
+        // Ensure live SharedPreferences state is loaded
         FocusRepository.init(applicationContext)
 
         val now = System.currentTimeMillis()
-        // 800ms debounce check so performGlobalAction does not spam-loop
-        if (now - lastBlockActionTime < 800L) {
-            return
-        }
-
-        val eventPkg = event.packageName?.toString()?.takeIf { it.isNotBlank() }
-        val activeWindowPkg = try {
-            rootInActiveWindow?.packageName?.toString()?.takeIf { it.isNotBlank() }
-        } catch (_: Exception) {
-            null
-        }
-
-        val targetPackage = eventPkg ?: activeWindowPkg ?: return
-
-        // Never block our own app, System UI, Settings, or the default Home Launcher
-        if (isExemptSystemOrSelfPackage(targetPackage)) {
-            return
-        }
-
         val isBlockingActive = FocusRepository.isBlockingActive.value
         val blockedPackages = FocusRepository.blockedPackages.value
 
-        // 1. FAST-PATH APP BLOCKING ON TYPE_WINDOW_STATE_CHANGED OR ANY FOREIGN PACKAGE EVENT:
-        // Immediately inspect event.packageName and activeWindowPkg without waiting for node traversal!
-        if (isBlockingActive) {
-            val candidatePackages = listOfNotNull(eventPkg, activeWindowPkg).distinct()
-            for (pkg in candidatePackages) {
-                if (!isExemptSystemOrSelfPackage(pkg) &&
-                    blockedPackages.contains(pkg) &&
-                    !FocusRepository.isPackageTemporarilyUnsealed(pkg, now)
-                ) {
-                    lastBlockActionTime = now
-                    FocusRepository.recordBlockedInterception(
-                        "Sealed App Blocked (${
-                            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) "WINDOW_STATE" else "ACTIVE_WINDOW"
-                        }): $pkg"
-                    )
-                    performGlobalAction(GLOBAL_ACTION_HOME)
-                    triggerSystemPenaltyOverlayOrToast(
-                        headerTitle = "[ ! SYSTEM PENALTY: ACCESS DENIED ]",
-                        subtitle = "[ ! SYSTEM PENALTY: DUNGEON LOCK ACTIVE ]",
-                        detail = "TARGET SEALED: $pkg\nComplete Focus Dungeons to earn Reward Tokens and unseal this application."
-                    )
+        // 3. FAST-PATH APP BLOCKING ON WINDOW STATE CHANGED (New Activity / App Foregrounded):
+        if (isBlockingActive && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            if (blockedPackages.contains(eventPkg) &&
+                !FocusRepository.isPackageTemporarilyUnsealed(eventPkg, now)
+            ) {
+                // Debounce check so we don't spam activity launches
+                if (now - lastBlockActionTime < 1000L) {
                     return
                 }
+                lastBlockActionTime = now
+
+                FocusRepository.recordBlockedInterception("Sealed App Intercepted: $eventPkg")
+
+                // Launch full-screen BlockerActivity with NEW_TASK | CLEAR_TOP
+                launchBlockerActivity(
+                    targetPackage = eventPkg,
+                    reason = "SEALED_APP"
+                )
+
+                // Also trigger transient penalty banner
+                triggerSystemPenaltyOverlayOrToast(
+                    headerTitle = "[ ! SYSTEM PENALTY: ACCESS DENIED ]",
+                    subtitle = "[ ! SYSTEM PENALTY: DUNGEON LOCK ACTIVE ]",
+                    detail = "TARGET SEALED: $eventPkg\nSpend Reward Tokens to unseal this app or complete your Focus session."
+                )
+                return
             }
         }
 
-        // 2. REAL SHORTS & REELS BLOCKING (Multi-Window & Multi-Signal Node Scanner)
+        // 4. REAL SHORTS & REELS BLOCKING (Multi-Window Node Scanner)
         val sealShorts = FocusRepository.sealYoutubeShorts.value
         val sealReels = FocusRepository.sealInstagramReels.value
 
@@ -121,44 +123,63 @@ class FocusBlockerService : AccessibilityService() {
             return
         }
 
+        // Respect per-app unseal for YouTube or Instagram
+        if (FocusRepository.isPackageTemporarilyUnsealed(eventPkg, now)) {
+            return
+        }
+
+        // Only scan within YouTube or Instagram packages
+        val isYoutube = eventPkg.equals("com.google.android.youtube", ignoreCase = true) ||
+            eventPkg.contains("youtube", ignoreCase = true)
+        val isInstagram = eventPkg.equals("com.instagram.android", ignoreCase = true) ||
+            eventPkg.contains("instagram", ignoreCase = true)
+
+        if (!isYoutube && !isInstagram) {
+            return
+        }
+
         val rootNodes = collectActiveRootNodes(event)
         if (rootNodes.isEmpty()) return
 
         for (rootNode in rootNodes) {
-            val nodePkg = rootNode.packageName?.toString()?.takeIf { it.isNotBlank() } ?: targetPackage
-
-            // Respect per-app Token unseal if the user explicitly unsealed YouTube or Instagram
+            val nodePkg = rootNode.packageName?.toString()?.takeIf { it.isNotBlank() } ?: eventPkg
             if (FocusRepository.isPackageTemporarilyUnsealed(nodePkg, now)) {
                 continue
             }
 
-            if (sealShorts && isYoutubeShortsDetected(nodePkg, rootNode)) {
+            if (sealShorts && isYoutube && isYoutubeShortsDetected(nodePkg, rootNode)) {
+                if (now - lastBlockActionTime < 1200L) return
                 lastBlockActionTime = now
-                FocusRepository.recordBlockedInterception("YouTube Shorts Sealed -> Kick-Out")
-                if (isBlockingActive && blockedPackages.contains(nodePkg)) {
-                    performGlobalAction(GLOBAL_ACTION_HOME)
-                } else {
-                    performGlobalAction(GLOBAL_ACTION_BACK)
-                }
+
+                FocusRepository.recordBlockedInterception("YouTube Shorts Sealed -> Kick-Back")
+                performGlobalAction(GLOBAL_ACTION_BACK)
+
+                launchBlockerActivity(
+                    targetPackage = nodePkg,
+                    reason = "SHORTS_REELS"
+                )
                 triggerSystemPenaltyOverlayOrToast(
                     headerTitle = "[ ! SYSTEM PENALTY: ACCESS DENIED ]",
-                    subtitle = "[ ! SYSTEM PENALTY: DUNGEON LOCK ACTIVE ]",
+                    subtitle = "[ ! SYSTEM PENALTY: SHORTS SEALED ]",
                     detail = "YOUTUBE SHORTS FEED SEALED BY THE SYSTEM.\nShort-form scrolling is forbidden."
                 )
                 return
             }
 
-            if (sealReels && isInstagramReelsDetected(nodePkg, rootNode)) {
+            if (sealReels && isInstagram && isInstagramReelsDetected(nodePkg, rootNode)) {
+                if (now - lastBlockActionTime < 1200L) return
                 lastBlockActionTime = now
-                FocusRepository.recordBlockedInterception("Instagram Reels Sealed -> Kick-Out")
-                if (isBlockingActive && blockedPackages.contains(nodePkg)) {
-                    performGlobalAction(GLOBAL_ACTION_HOME)
-                } else {
-                    performGlobalAction(GLOBAL_ACTION_BACK)
-                }
+
+                FocusRepository.recordBlockedInterception("Instagram Reels Sealed -> Kick-Back")
+                performGlobalAction(GLOBAL_ACTION_BACK)
+
+                launchBlockerActivity(
+                    targetPackage = nodePkg,
+                    reason = "SHORTS_REELS"
+                )
                 triggerSystemPenaltyOverlayOrToast(
                     headerTitle = "[ ! SYSTEM PENALTY: ACCESS DENIED ]",
-                    subtitle = "[ ! SYSTEM PENALTY: DUNGEON LOCK ACTIVE ]",
+                    subtitle = "[ ! SYSTEM PENALTY: REELS SEALED ]",
                     detail = "INSTAGRAM REELS FEED SEALED BY THE SYSTEM.\nShort-form scrolling is forbidden."
                 )
                 return
@@ -166,15 +187,38 @@ class FocusBlockerService : AccessibilityService() {
         }
     }
 
+    private fun launchBlockerActivity(targetPackage: String, reason: String) {
+        try {
+            val intent = Intent(applicationContext, BlockerActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(BlockerActivity.EXTRA_BLOCKED_PACKAGE, targetPackage)
+                putExtra(BlockerActivity.EXTRA_BLOCK_REASON, reason)
+            }
+            applicationContext.startActivity(intent)
+        } catch (_: Exception) {
+            // Fallback to sending home if activity launching has OEM restriction
+            performGlobalAction(GLOBAL_ACTION_HOME)
+        }
+    }
+
     private fun isExemptSystemOrSelfPackage(pkg: String): Boolean {
+        val ownPkg = applicationContext.packageName
+        if (pkg == ownPkg ||
+            pkg == "com.example" ||
+            pkg.startsWith("com.aistudio.systemfocus")
+        ) {
+            return true
+        }
+
         val homePkg = cachedHomePackage ?: resolveDefaultHomeLauncherPackage().also {
             cachedHomePackage = it
         }
-        return pkg == applicationContext.packageName ||
-            pkg == "com.android.systemui" ||
+
+        return pkg == "com.android.systemui" ||
             pkg == "com.android.settings" ||
             pkg.contains("inputmethod", ignoreCase = true) ||
             pkg.contains("permissioncontroller", ignoreCase = true) ||
+            pkg.contains("launcher", ignoreCase = true) ||
             (homePkg != null && pkg == homePkg)
     }
 
@@ -298,8 +342,9 @@ class FocusBlockerService : AccessibilityService() {
 
                 wm.addView(overlayContainer, params)
                 activePenaltyOverlayView = overlayContainer
+
                 mainHandler.removeCallbacks(dismissOverlayRunnable)
-                mainHandler.postDelayed(dismissOverlayRunnable, 2800L)
+                mainHandler.postDelayed(dismissOverlayRunnable, 2500L)
             } catch (_: Exception) {
                 Toast.makeText(
                     applicationContext,
