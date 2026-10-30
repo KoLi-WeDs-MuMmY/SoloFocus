@@ -114,8 +114,11 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             while (true) {
                 delay(1000L)
-                _currentTimeMillis.value = System.currentTimeMillis()
-                FocusRepository.pruneExpiredUnseals(_currentTimeMillis.value)
+                val now = System.currentTimeMillis()
+                if (unsealedAppsExpiryMap.value.isNotEmpty()) {
+                    _currentTimeMillis.value = now
+                    FocusRepository.pruneExpiredUnseals(now)
+                }
                 if (isTimerRunning.value) {
                     FocusRepository.tickOneSecond()
                 }

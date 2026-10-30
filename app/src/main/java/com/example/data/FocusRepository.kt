@@ -104,6 +104,10 @@ object FocusRepository {
 
     private var prefs: SharedPreferences? = null
     private var appContext: Context? = null
+    @Volatile
+    private var isInitialized: Boolean = false
+    @Volatile
+    private var lastMidnightCheckMs: Long = 0L
 
     private val defaultBlockedPackages = setOf(
         "com.google.android.youtube",
@@ -184,15 +188,33 @@ object FocusRepository {
         return ((rawTokens / 5.0).roundToInt() * 5).coerceAtLeast(10)
     }
 
+    fun isReady(): Boolean = isInitialized
+
     fun init(context: Context) {
         val app = context.applicationContext
         appContext = app
         val sharedPrefs = prefs ?: app
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .also { prefs = it }
-        loadFromPrefs(sharedPrefs)
-        checkAndEnforceMidnightQuestReset(sharedPrefs)
-        pruneExpiredUnseals()
+
+        if (isInitialized) {
+            val now = System.currentTimeMillis()
+            if (now - lastMidnightCheckMs > 60_000L) {
+                lastMidnightCheckMs = now
+                checkAndEnforceMidnightQuestReset(sharedPrefs)
+                pruneExpiredUnseals(now)
+            }
+            return
+        }
+
+        synchronized(this) {
+            if (isInitialized) return
+            loadFromPrefs(sharedPrefs)
+            lastMidnightCheckMs = System.currentTimeMillis()
+            checkAndEnforceMidnightQuestReset(sharedPrefs)
+            pruneExpiredUnseals()
+            isInitialized = true
+        }
         FocusShieldForegroundService.startShield(app)
     }
 

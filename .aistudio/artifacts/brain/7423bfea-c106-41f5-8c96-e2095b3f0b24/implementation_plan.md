@@ -1,94 +1,87 @@
-# System HUD: Solo Leveling Focus & Anti-Distraction App (v1.2 Upgrade)
+# System HUD: Block Kick-Out Popup & 60/120 FPS Smoothness Fix Plan
 
-Version 1.2 overhauls the reward loop into a **Dopamine-Tuned Reward Token Economy**, introduces **Timer-Quest Binding**, adds a full-screen **`WindowManager` Crimson System Penalty Overlay** (`SYSTEM_ALERT_WINDOW`), fixes the **Quest Checkbox XP Exploit** with de-leveling support, and transitions `[ DAILY QUESTS ]` to a **midnight-resetting zero-state log**—while strictly preserving your `.github/workflows/build.yml` and `app/build.gradle.kts` debug signing configuration.
+This plan resolves the four issues with the **Block Kick-Out Popup** (unresponsive buttons, stuck 3-second countdown timer, frozen screen gestures) and eliminates **UI lag** across the app while keeping the exact same **Solo Leveling System HUD** design and UX.
 
 ---
 
-## User Review & Critical Decisions
+## User Review & Confirmed Decisions
 
 > [!IMPORTANT]
-> The following mechanics have been locked in from your clarifications for Version 1.2:
+> Your preferences from the clarification step are locked in:
 
-- **Confirmed Decision 1 — Scientifically Tuned Focus Threshold & Token Yield**:
-  - **5-Minute Activation Threshold**: Focusing for under **5 minutes** yields `0 Tokens` (preventing micro-session farming). Once the Player passes the **5-minute threshold** (or completes any focus preset: `15m`, `25m`, `35m`, `50m`, `70m`), tokens are awarded.
-  - **Fixed Token Ratio (`35m Focus = 100 Tokens = 10m App Usability`)**: Every **3.5 minutes** of Focus grants **10 Reward Tokens** (`~2.86 Tokens/min`), where **10 Tokens = 1 minute of app usability**.
-- **Confirmed Decision 2 — Fixed-Price Per-App Token Exchange (`10m` to `60m` Multiples, Stackable)**:
-  - Removed automatic global break time. Instead, in `[ PENALTY SEALS ]`, each blocked app can be independently unsealed using fixed-price Token Passes in **10-minute multiples up to 1 hour** per transaction:
-    - `10m` = **100 Tokens** | `20m` = **200 Tokens** | `30m` = **300 Tokens** | `40m` = **400 Tokens** | `50m` = **500 Tokens** | `60m (1 Hr)` = **600 Tokens**
-  - **Independent & Stackable**: Unsealing one app (e.g., Instagram) leaves all other blocked apps strictly sealed. Repeat transactions on the same app stack additional time with no cap.
-- **Confirmed Decision 3 — Timer-Quest Binding, XP Reversal, & Empty Midnight Reset**:
-  - Players can bind an active Daily Quest directly to the Focus Timer in `[ STATUS & TIMER ]`; reaching `00:00` auto-completes the bound quest, grants its XP + Focus XP, and deposits Reward Tokens.
-  - Unchecking a completed quest **deducts** its exact XP reward (and de-levels the Player if XP drops below the current level floor).
-  - `[ DAILY QUESTS ]` starts at **0 quests** (no pre-loaded starter quests) and automatically clears/resets at midnight (`00:00` local date transition).
+- **Confirmed Decision 1 — 3-Second Overlay Countdown Then Kick to Home**:
+  - Opening a blocked app immediately covers it with the full-screen Crimson System Penalty popup.
+  - The popup's **3-second countdown timer** (`3s` → `2s` → `1s`) ticks smoothly without resetting, and automatically kicks the user to the **Android Home screen** as soon as the 3 seconds finish.
+  - Tapping `[ RETURN TO SAFE ZONE (HOME) ]` or `[ VIEW DAILY QUESTS IN SYSTEM HUD ]` responds immediately on the first tap, cancels the timer, dismisses the popup, and navigates directly to Home or Daily Quests.
+- **Confirmed Decision 2 — Zero-Lag 60/120 FPS Performance with the Same Solo Leveling HUD UI**:
+  - Keep the exact same Solo Leveling System HUD aesthetic (chamfered glowing borders, Mana Core Timer Dial, scanlines, and color palette) while eliminating background service thrashing, redundant disk/JSON reads, and unnecessary per-frame redraws.
 
 ---
 
-## 1. Overview & Core Concept
+## 1. Root Causes Identified & How We Will Fix Them
 
-- **What Version 1.2 Delivers**:
-  1. **The Reward Token Economy (`FocusRepository` + `[ STATUS & TIMER ]` + `[ PENALTY SEALS ]`)**:
-     - Removes the old Reward Time selector from `[ STATUS & TIMER ]`.
-     - Displays the Player's live **Reward Token Vault** (`[ REWARD TOKENS: X ]`) in the HUD header and `[ PENALTY SEALS ]`.
-     - Calculates and deposits Reward Tokens whenever a focus session completes (`00:00`) or is claimed after passing the **5-minute minimum focus threshold** (`tokens = floor((focusedMinutes / 3.5) * 10)`).
-     - Adds the **Token Exchange Window** in `[ PENALTY SEALS ]`: select any currently sealed app, pick a fixed-price pass (`10m` for `100T`, `20m` for `200T`, `30m` for `300T`, `40m` for `400T`, `50m` for `500T`, `60m` for `600T`), and unseal **only** that specific package with a live countdown badge (`UNSEALED: MM:SS REMAINING`).
-  2. **Timer-Quest Binding (`[ STATUS & TIMER ]`)**:
-     - Adds a chamfered `[ BIND ACTIVE DAILY QUEST ]` selector on `[ STATUS & TIMER ]` listing all incomplete quests from `[ DAILY QUESTS ]` (plus `[ NONE — FREE FOCUS DUNGEON ]`).
-     - When the Focus Timer reaches `00:00`, if a quest is bound, it automatically marks that quest completed, awards the quest's XP (`50`–`150 XP`) + `+100 XP` Dungeon clear bonus, and deposits the earned Reward Tokens.
-  3. **System Overlay Kick-Out & `SYSTEM_ALERT_WINDOW` (`FocusBlockerService`)**:
-     - Declares `<uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />` in `AndroidManifest.xml`.
-     - Checks `Settings.canDrawOverlays(context)` on resume and renders a glowing `[ GRANT OVERLAY SYSTEM AUTHORITY ]` button (`Settings.ACTION_MANAGE_OVERLAY_PERMISSION`) when missing.
-     - When `FocusBlockerService` intercepts a sealed app (whose package is not currently unsealed in the Token Exchange) or a sealed Shorts/Reels feed, it triggers `GLOBAL_ACTION_HOME` / `GLOBAL_ACTION_BACK` AND uses `WindowManager` (`LayoutParams.TYPE_APPLICATION_OVERLAY`) to display a full-screen, un-dismissible **Crimson Red Solo Leveling Penalty Overlay** (`[ ! SYSTEM PENALTY: ACCESS DENIED ]` / `[ ! SYSTEM PENALTY: DUNGEON LOCK ACTIVE ]`) for **3 seconds**.
-  4. **Quest XP Exploit Fix & Midnight Empty Reset (`[ DAILY QUESTS ]`)**:
-     - Toggling a quest from `completed -> incomplete` subtracts `quest.xpReward` from `PlayerStatsState` (and steps down `level` and `HunterRank` if `currentXp < 0`).
-     - Removes all starter quests so `[ DAILY QUESTS ]` initializes with an empty list (`0` quests) and checks the current calendar date (`yyyy-MM-dd`) on init/resume to automatically clear the daily quest log at midnight.
+### Issue 1, 2 & 3: Popup Buttons Not Working, 3s Timer Stuck, and Gestures Freezing
+- **Why it happens**:
+  - When the `WindowManager` overlay covers a blocked app (e.g., YouTube), Android still reports the blocked app as the foreground window behind the overlay.
+  - Both `FocusShieldForegroundService` (polling every 350ms) and `FocusBlockerService.onAccessibilityEvent` (throttled at 450ms) detect the blocked app again and call `displaySystemPenaltyOverlayInsideApp()` **nearly 3 times per second**.
+  - Each call **destroys and recreates** the overlay view and **cancels and restarts** `CountDownTimer(3000L, 1000L)` back to `3s`! Because the view is destroyed every ~350ms before a finger tap (`ACTION_DOWN` → `ACTION_UP`) or a 1-second timer tick can complete, buttons never fire, the timer stays frozen at `3s`, and `WindowManager` touch/gesture dispatch gets flooded.
+- **The Fix**:
+  1. **Single-Instance Overlay Guard**: Track active overlay state (`isOverlayShowing`) across both `FocusBlockerService` and `FocusShieldForegroundService`. Once the penalty overlay is displayed for a blocked app, all subsequent polls/events are ignored until the 3-second countdown completes or the user taps a button.
+  2. **Smooth 3-Second Countdown → Auto-Kick to Home**: Run a single, uninterrupted `CountDownTimer(3000L, 250L)` that updates the countdown badge (`3s` → `2s` → `1s`) and, in `onFinish()`, cleanly removes the overlay and kicks the user to the Android Home screen (`GLOBAL_ACTION_HOME` + `CATEGORY_HOME` intent) with a brief post-kick transition guard.
+  3. **Instant First-Tap Button & Back-Gesture Handling**: Wire `[ RETURN TO SAFE ZONE (HOME) ]` and `[ VIEW DAILY QUESTS IN SYSTEM HUD ]` (plus system Back gestures in both the `WindowManager` overlay and `BlockerOverlayActivity`) to immediately cancel the timer, remove the overlay once, and route to Home or the Daily Quests tab.
 
----
-
-## 2. User Experience & Visual Design
-
-- **Key User Flows in v1.2**:
-  1. **Binding a Quest & Earning Tokens (`[ STATUS & TIMER ]`)**:
-     - Select a Focus duration (`5m`, `15m`, `25m`, `35m`, `50m`, `70m` — showing the exact Token payout on each chip, e.g., `35m (+100T)`), optionally bind an active Daily Quest, and tap `[ ENTER DUNGEON ]`.
-     - Reaching `00:00` (or claiming after `>= 5m` focused) deposits the Reward Tokens, auto-completes the bound quest, and triggers `[ QUEST CLEARED: +100 TOKENS DEPOSITED ]`.
-  2. **Redeeming Tokens Per App (`[ PENALTY SEALS ]`)**:
-     - Open the `[ TOKEN EXCHANGE: TEMPORARY UNSEAL ]` card, pick a sealed app, choose a fixed-price multiple (`10m / 100T` up to `60m / 600T`), and tap `[ REDEEM PASS ]`. Only that app is unsealed for the redeemed duration; tapping it again stacks more time.
-  3. **Aggressive System Penalty Overlay Kick-Out**:
-     - Attempting to open a locked app or scroll YouTube Shorts / Instagram Reels while sealed immediately kicks the user out and flashes a full-screen Crimson HUD overlay drawn directly via `WindowManager` for 3 seconds.
+### Issue 4: App Running Laggy on High-Refresh-Rate Devices
+- **Why it happens**:
+  - `FocusBlockerService.onAccessibilityEvent()` calls `FocusRepository.init(applicationContext)` on **every accessibility event**, which re-reads `SharedPreferences`, parses JSON strings, and calls `startForegroundService()` dozens of times per second on the main UI thread.
+  - `FocusBlockerService` listens to `TYPES_ALL_MASK` with a `30ms` timeout and runs a 24-level recursive view-tree scan across all apps on every scroll frame.
+  - `ManaCoreTimerDial` runs two infinite Canvas animations (`rotationDegrees` and `pulseAlpha`) at 60–120 FPS even when the timer is idle/stopped, and `MainActivity` collects a 1-second `currentTimeMillis` ticker at the root composable, forcing full-screen recomposition every second.
+- **The Fix**:
+  1. **One-Time Repository Init**: Guard `FocusRepository.init()` with an `@Volatile var isInitialized` check so it initializes once at startup and never re-parses JSON or restarts the foreground service on accessibility events.
+  2. **Targeted Accessibility Event Filtering**: Restrict `FocusBlockerService` to `TYPE_WINDOW_STATE_CHANGED | TYPE_WINDOW_CONTENT_CHANGED` (`120ms` notification timeout) and only run the Shorts/Reels node-tree scan when the active package is actually YouTube or Instagram.
+  3. **Cached HUD Drawing & Idle Animation Pause**: Use `Modifier.drawWithCache` for `SystemWindowCard`, `SystemBackgroundScanlines`, and static `ManaCoreTimerDial` geometry so paths and gradients are cached instead of allocated every frame, and pause the infinite dial rotation when the timer is not running.
+  4. **Eliminate Root-Level 1s Recomposition**: Scope timestamp updates so the root `MainActivity` HUD does not recompose the entire screen tree every second.
 
 ---
 
-## 3. Technical Architecture & Data Strategy *(Technical Reference)*
+## 2. Technical Architecture & Lifecycle Flow
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                        ANDROID SYSTEM & OS LAYER                             │
-│  ┌────────────────────────────────────┐  ┌────────────────────────────────┐  │
-│  │ FocusBlockerService                │  │ System Overlay Authority       │  │
-│  │ • Checks per-app unseal expiry     │  │ • SYSTEM_ALERT_WINDOW          │  │
-│  │ • GLOBAL_HOME / GLOBAL_BACK        │  │ • Settings.canDrawOverlays()   │  │
-│  │ • WindowManager Crimson Overlay    │  │ • ACTION_MANAGE_OVERLAY_PERM   │  │
-│  │   (3s un-dismissible kick-out)     │  └────────────────────────────────┘  │
-└──┴─────────────────┬──────────────────┴──────────────────────────────────────┘
-                     │ SharedPreferences + StateFlow
-                     ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                     DATA & ECONOMY LAYER (FocusRepository)                   │
-│  • Reward Tokens Balance (35m Focus = 100 Tokens; 5m min threshold)          │
-│  • Per-App Unseal Expiry Map (packageName -> expiryEpochMillis, stackable)   │
-│  • Bound Quest ID -> Auto-complete + XP + Token deposit at 00:00             │
-│  • Bidirectional XP Engine (addXp on check, deductXp + de-level on uncheck)  │
-│  • Midnight Date Guard (yyyy-MM-dd check clears Daily Quests at 00:00)       │
-└────────────────────────────────────┬─────────────────────────────────────────┘
-                                     │
-                                     ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                  PRESENTATION LAYER (FocusViewModel + Compose HUD)           │
-│  ┌───────────────────────┬────────────────────────┬───────────────────────┐  │
-│  │ [ STATUS & TIMER ]    │ [ DAILY QUESTS ]       │ [ PENALTY SEALS ]     │  │
-│  │ • Token Balance Badge │ • Starts Empty (0)     │ • Overlay Perm Button │  │
-│  │ • Bind Quest Selector │ • Gemini System Arbiter│ • Token Exchange UI   │  │
-│  │ • Focus Presets w/    │ • Check (+XP) /        │   (10m..60m passes    │  │
-│  │   5m Min Threshold    │   Uncheck (-XP Fix)    │   per individual app) │  │
-│  └───────────────────────┴────────────────────────┴───────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                   BLOCKED APP INTERCEPTION FLOW (FIXED)                     │
+│                                                                             │
+│  Blocked App Opened (e.g., YouTube / Instagram)                             │
+│         │                                                                   │
+│         ▼                                                                   │
+│  [ isOverlayShowing == true? ] ──(YES)──► Ignore duplicate poll/event       │
+│         │ (NO)                            (No view destroy/recreate loop!)  │
+│         ▼                                                                   │
+│  Show Single Crimson Penalty Overlay (isOverlayShowing = true)              │
+│  Start Single 3.0s CountDownTimer (ticks 3s -> 2s -> 1s smoothly)           │
+│         │                                                                   │
+│         ├──► User taps [ RETURN TO SAFE ZONE ] ──► Cancel timer, remove     │
+│         │    or System Back Gesture                overlay, launch Home     │
+│         │                                                                   │
+│         ├──► User taps [ VIEW DAILY QUESTS ] ────► Cancel timer, remove     │
+│         │                                          overlay, open Quests Tab │
+│         │                                                                   │
+│         └──► 3.0s Timer Reaches 00:00 ───────────► Remove overlay & kick    │
+│                                                    blocked app to Home      │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 3. Files to Modify
+
+- `app/src/main/java/com/example/service/FocusBlockerService.kt`:
+  - Unify overlay state management (`isOverlayShowing`, single `activeOverlayView`, single `activeCountdownTimer`) so the popup is never destroyed/recreated mid-countdown.
+  - Fix the 3-second countdown timer (`3s` → `2s` → `1s` → remove overlay + kick to Home screen) and make both popup buttons and Back key/gesture work on the first tap.
+  - Remove per-event `FocusRepository.init()` calls and restrict deep node scanning strictly to YouTube/Instagram when Shorts/Reels seals are active.
+- `app/src/main/java/com/example/service/FocusShieldForegroundService.kt`:
+  - Skip triggering `enforceExternalAppBlock` while the penalty overlay is already on screen or during the brief post-kick Home transition.
+- `app/src/main/java/com/example/ui/BlockerOverlayActivity.kt`:
+  - Add a matching 3-second countdown timer with auto-kick to Home and update Back gesture handling so swiping/pressing Back exits to Home cleanly.
+- `app/src/main/java/com/example/data/FocusRepository.kt`:
+  - Make `FocusRepository.init()` idempotent (`isInitialized` guard) so `SharedPreferences` and JSON parsing only run once.
+- `app/src/main/java/com/example/ui/components/SystemHudComponents.kt`, `app/src/main/java/com/example/ui/FocusViewModel.kt`, & `app/src/main/java/com/example/MainActivity.kt`:
+  - Cache HUD Canvas drawing (`drawWithCache`), pause idle infinite transitions when the timer is stopped, and stop root-level 1-second full-screen recompositions.

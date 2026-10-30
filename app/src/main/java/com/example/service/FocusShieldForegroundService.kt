@@ -20,15 +20,14 @@ import com.example.data.FocusRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * Foreground Service that prevents Android OS from freezing or throttling
- * the application process when the user minimizes the app.
- * Also runs a 350ms UsageStatsManager fallback watcher to guarantee interception
- * across all devices and OEM battery optimizers.
+ * Foreground Service that keeps the System Focus blocker process active in the background
+ * and runs a single guarded UsageStatsManager fallback watcher.
  */
 class FocusShieldForegroundService : Service() {
 
@@ -36,63 +35,80 @@ class FocusShieldForegroundService : Service() {
         const val CHANNEL_ID = "focus_shield_channel"
         const val NOTIFICATION_ID = 9101
 
+        @Volatile
+        private var isServiceRunning: Boolean = false
+
         fun startShield(context: Context) {
+            if (isServiceRunning) return
             try {
-                val intent = Intent(context, FocusShieldForegroundService::class.java)
-                ContextCompat.startForegroundService(context, intent)
+                val appCtx = context.applicationContext
+                val intent = Intent(appCtx, FocusShieldForegroundService::class.java)
+                ContextCompat.startForegroundService(appCtx, intent)
             } catch (_: Exception) {
             }
         }
 
         fun stopShield(context: Context) {
             try {
-                val intent = Intent(context, FocusShieldForegroundService::class.java)
-                context.stopService(intent)
+                isServiceRunning = false
+                val appCtx = context.applicationContext
+                val intent = Intent(appCtx, FocusShieldForegroundService::class.java)
+                appCtx.stopService(intent)
             } catch (_: Exception) {
             }
         }
     }
 
-    private val serviceJob = Job()
+    private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.Default + serviceJob)
-    private var lastInterceptionTime = 0L
+    private var watcherJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
+        isServiceRunning = true
         FocusRepository.init(applicationContext)
         ensureShieldChannelCreated()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        FocusRepository.init(applicationContext)
+        isServiceRunning = true
+        if (!FocusRepository.isReady()) {
+            FocusRepository.init(applicationContext)
+        }
         val notification = buildOngoingShieldNotification()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val foregroundServiceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val foregroundServiceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                } else {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                }
+                startForeground(NOTIFICATION_ID, notification, foregroundServiceType)
             } else {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                startForeground(NOTIFICATION_ID, notification)
             }
-            startForeground(NOTIFICATION_ID, notification, foregroundServiceType)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        } catch (_: Exception) {
         }
 
-        startUsageStatsWatcher()
+        ensureSingleUsageStatsWatcher()
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun startUsageStatsWatcher() {
-        serviceScope.launch {
+    private fun ensureSingleUsageStatsWatcher() {
+        if (watcherJob?.isActive == true) return
+        watcherJob = serviceScope.launch {
             while (isActive) {
-                delay(350L)
-                val now = System.currentTimeMillis()
-                if (now - lastInterceptionTime < 600L) {
+                delay(500L)
+
+                // Never re-trigger while the 3s penalty overlay is already on screen or cooling down
+                if (FocusBlockerService.isOverlayCurrentlyShowing()) {
                     continue
                 }
 
+                val now = System.currentTimeMillis()
                 if (!FocusRepository.isDungeonLockActive(now)) {
                     continue
                 }
@@ -102,14 +118,16 @@ class FocusShieldForegroundService : Service() {
                     continue
                 }
 
-                val topPkg = queryCurrentForegroundPackage()
+                val topPkg = queryCurrentForegroundPackage(now) ?: continue
                 val ownPkg = packageName
-                if (topPkg == null || topPkg == ownPkg || topPkg == "com.example") {
+                if (topPkg == ownPkg ||
+                    topPkg == "com.example" ||
+                    topPkg.startsWith("com.aistudio.systemfocus")
+                ) {
                     continue
                 }
 
                 if (blocked.contains(topPkg) && !FocusRepository.isPackageTemporarilyUnsealed(topPkg, now)) {
-                    lastInterceptionTime = now
                     FocusRepository.recordBlockedInterception("UsageStats Watcher Intercepted: $topPkg")
                     FocusBlockerService.triggerBlockFromAnywhere(applicationContext, topPkg)
                 }
@@ -117,11 +135,10 @@ class FocusShieldForegroundService : Service() {
         }
     }
 
-    private fun queryCurrentForegroundPackage(): String? {
+    private fun queryCurrentForegroundPackage(now: Long): String? {
         val usm = getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager ?: return null
-        val now = System.currentTimeMillis()
         val events = try {
-            usm.queryEvents(now - 3000L, now)
+            usm.queryEvents(now - 4000L, now)
         } catch (_: Exception) {
             return null
         }
@@ -175,6 +192,8 @@ class FocusShieldForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        isServiceRunning = false
+        watcherJob?.cancel()
         serviceJob.cancel()
         super.onDestroy()
     }

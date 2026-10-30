@@ -86,16 +86,28 @@ import com.example.service.FocusShieldForegroundService
 import com.example.ui.theme.SystemWindowSurface
 
 class MainActivity : ComponentActivity() {
+    private var requestedTabFromIntent by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         FocusRepository.init(applicationContext)
         FocusShieldForegroundService.startShield(applicationContext)
+        requestedTabFromIntent = intent?.getStringExtra("EXTRA_OPEN_TAB")
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme {
-                SystemFocusHudApp()
+                SystemFocusHudApp(
+                    requestedTab = requestedTabFromIntent,
+                    onConsumeRequestedTab = { requestedTabFromIntent = null }
+                )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        requestedTabFromIntent = intent.getStringExtra("EXTRA_OPEN_TAB")
     }
 
     override fun onResume() {
@@ -106,10 +118,19 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun SystemFocusHudApp(
-    viewModel: FocusViewModel = viewModel()
+    viewModel: FocusViewModel = viewModel(),
+    requestedTab: String? = null,
+    onConsumeRequestedTab: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+
+    LaunchedEffect(requestedTab) {
+        if (requestedTab == "DAILY_QUESTS") {
+            viewModel.selectTab(SystemHudTab.DAILY_QUESTS)
+            onConsumeRequestedTab()
+        }
+    }
 
     val playerStats by viewModel.playerStats.collectAsStateWithLifecycle()
     val rewardTokens by viewModel.rewardTokens.collectAsStateWithLifecycle()
@@ -125,7 +146,6 @@ fun SystemFocusHudApp(
     val sealInstagramReels by viewModel.sealInstagramReels.collectAsStateWithLifecycle()
     val blockedPackages by viewModel.blockedPackages.collectAsStateWithLifecycle()
     val unsealedAppsExpiryMap by viewModel.unsealedAppsExpiryMap.collectAsStateWithLifecycle()
-    val currentTimeMillis by viewModel.currentTimeMillis.collectAsStateWithLifecycle()
     val dailyQuests by viewModel.dailyQuests.collectAsStateWithLifecycle()
     val geminiApiKey by viewModel.geminiApiKey.collectAsStateWithLifecycle()
     val isArbiterEvaluating by viewModel.isArbiterEvaluating.collectAsStateWithLifecycle()
@@ -138,7 +158,6 @@ fun SystemFocusHudApp(
     val hasUsageStatsPermission by viewModel.hasUsageStatsPermission.collectAsStateWithLifecycle()
     val installedApps by viewModel.installedApps.collectAsStateWithLifecycle()
     val appSearchQuery by viewModel.appSearchQuery.collectAsStateWithLifecycle()
-    val lastBlockedEventDescription by viewModel.lastBlockedEventDescription.collectAsStateWithLifecycle()
 
     var hasDismissedStartupPermissionModal by rememberSaveable { mutableStateOf(false) }
     var forceShowPermissionModal by rememberSaveable { mutableStateOf(false) }
@@ -300,7 +319,6 @@ fun SystemFocusHudApp(
                             sealInstagramReels = sealInstagramReels,
                             blockedPackages = blockedPackages,
                             unsealedAppsExpiryMap = unsealedAppsExpiryMap,
-                            currentTimeMillis = currentTimeMillis,
                             installedApps = installedApps,
                             appSearchQuery = appSearchQuery,
                             onRequestNotificationPermissionAndSendBar = requestNotificationsAndPostAccessBar,
@@ -351,7 +369,6 @@ fun SystemFocusHudApp(
                             sealInstagramReels = sealInstagramReels,
                             blockedPackages = blockedPackages,
                             unsealedAppsExpiryMap = unsealedAppsExpiryMap,
-                            currentTimeMillis = currentTimeMillis,
                             installedApps = installedApps,
                             appSearchQuery = appSearchQuery,
                             onRequestNotificationPermissionAndSendBar = requestNotificationsAndPostAccessBar,
@@ -492,7 +509,6 @@ private fun ActiveTabContent(
     sealInstagramReels: Boolean,
     blockedPackages: Set<String>,
     unsealedAppsExpiryMap: Map<String, Long>,
-    currentTimeMillis: Long,
     installedApps: List<com.example.ui.InstalledAppItem>,
     appSearchQuery: String,
     onRequestNotificationPermissionAndSendBar: () -> Unit,
@@ -533,6 +549,7 @@ private fun ActiveTabContent(
             )
         }
         SystemHudTab.PENALTY_SEALS -> {
+            val currentTimeMillis by viewModel.currentTimeMillis.collectAsStateWithLifecycle()
             PenaltySealsScreen(
                 isAccessibilityEnabled = isAccessibilityEnabled,
                 canDrawOverlays = canDrawOverlays,

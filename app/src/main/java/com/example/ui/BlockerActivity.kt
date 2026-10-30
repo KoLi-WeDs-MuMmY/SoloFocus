@@ -162,14 +162,14 @@ fun BlockerScreen(
         }
     }
 
-    // 5-second mindful cooldown timer (standard in One Sec / Freedom / Regain)
-    var countdownSeconds by remember { mutableIntStateOf(5) }
+    // 3-second countdown timer that automatically kicks out to the Home screen
+    var countdownSeconds by remember { mutableIntStateOf(3) }
     val progressAnimation = remember { Animatable(1f) }
 
     LaunchedEffect(Unit) {
         progressAnimation.animateTo(
             targetValue = 0f,
-            animationSpec = tween(durationMillis = 5000, easing = LinearEasing)
+            animationSpec = tween(durationMillis = 3000, easing = LinearEasing)
         )
     }
 
@@ -178,6 +178,7 @@ fun BlockerScreen(
             delay(1000L)
             countdownSeconds -= 1
         }
+        onNavigateHome()
     }
 
     // Intercept Back button: always return to Home, never expose the blocked app

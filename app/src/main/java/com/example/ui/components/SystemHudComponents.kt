@@ -43,10 +43,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -91,60 +92,66 @@ fun SystemWindowCard(
     contentPadding: Dp = 16.dp,
     content: @Composable BoxScope.() -> Unit
 ) {
-    val shape = CutCornerShape(topStart = cornerCut, bottomEnd = cornerCut)
-    val borderBrush = Brush.linearGradient(
-        colors = listOf(borderStartColor, borderEndColor, borderStartColor.copy(alpha = 0.75f))
-    )
+    val shape = remember(cornerCut) { CutCornerShape(topStart = cornerCut, bottomEnd = cornerCut) }
+    val borderBrush = remember(borderStartColor, borderEndColor) {
+        Brush.linearGradient(
+            colors = listOf(borderStartColor, borderEndColor, borderStartColor.copy(alpha = 0.75f))
+        )
+    }
 
     Box(
         modifier = modifier
             .clip(shape)
             .background(surfaceColor, shape)
             .border(width = 1.5.dp, brush = borderBrush, shape = shape)
-            .drawBehind {
-                val stepPx = 6.dp.toPx()
-                var y = 0f
-                while (y < size.height) {
-                    drawLine(
-                        color = borderStartColor.copy(alpha = 0.035f),
-                        start = Offset(0f, y),
-                        end = Offset(size.width, y),
-                        strokeWidth = 1f
-                    )
-                    y += stepPx
-                }
-
+            .drawWithCache {
+                val stepPx = 10.dp.toPx()
+                val scanlineColor = borderStartColor.copy(alpha = 0.035f)
+                val bracketColor = borderStartColor.copy(alpha = 0.85f)
                 val bracketLen = 14.dp.toPx()
                 val stroke = 2.dp.toPx()
                 val inset = 4.dp.toPx()
 
-                // Top-Right bracket
-                drawLine(
-                    color = borderStartColor.copy(alpha = 0.85f),
-                    start = Offset(size.width - bracketLen - inset, inset),
-                    end = Offset(size.width - inset, inset),
-                    strokeWidth = stroke
-                )
-                drawLine(
-                    color = borderStartColor.copy(alpha = 0.85f),
-                    start = Offset(size.width - inset, inset),
-                    end = Offset(size.width - inset, inset + bracketLen),
-                    strokeWidth = stroke
-                )
+                onDrawBehind {
+                    var y = 0f
+                    while (y < size.height) {
+                        drawLine(
+                            color = scanlineColor,
+                            start = Offset(0f, y),
+                            end = Offset(size.width, y),
+                            strokeWidth = 1f
+                        )
+                        y += stepPx
+                    }
 
-                // Bottom-Left bracket
-                drawLine(
-                    color = borderStartColor.copy(alpha = 0.85f),
-                    start = Offset(inset, size.height - bracketLen - inset),
-                    end = Offset(inset, size.height - inset),
-                    strokeWidth = stroke
-                )
-                drawLine(
-                    color = borderStartColor.copy(alpha = 0.85f),
-                    start = Offset(inset, size.height - inset),
-                    end = Offset(inset + bracketLen, size.height - inset),
-                    strokeWidth = stroke
-                )
+                    // Top-Right bracket
+                    drawLine(
+                        color = bracketColor,
+                        start = Offset(size.width - bracketLen - inset, inset),
+                        end = Offset(size.width - inset, inset),
+                        strokeWidth = stroke
+                    )
+                    drawLine(
+                        color = bracketColor,
+                        start = Offset(size.width - inset, inset),
+                        end = Offset(size.width - inset, inset + bracketLen),
+                        strokeWidth = stroke
+                    )
+
+                    // Bottom-Left bracket
+                    drawLine(
+                        color = bracketColor,
+                        start = Offset(inset, size.height - bracketLen - inset),
+                        end = Offset(inset, size.height - inset),
+                        strokeWidth = stroke
+                    )
+                    drawLine(
+                        color = bracketColor,
+                        start = Offset(inset, size.height - inset),
+                        end = Offset(inset + bracketLen, size.height - inset),
+                        strokeWidth = stroke
+                    )
+                }
             }
             .padding(contentPadding),
         content = content
@@ -155,31 +162,40 @@ fun SystemWindowCard(
 fun SystemBackgroundScanlines(
     modifier: Modifier = Modifier
 ) {
-    Canvas(modifier = modifier.fillMaxSize()) {
-        val gridSpacing = 36.dp.toPx()
-        var x = 0f
-        while (x < size.width) {
-            drawLine(
-                color = HudGridLine.copy(alpha = 0.05f),
-                start = Offset(x, 0f),
-                end = Offset(x, size.height),
-                strokeWidth = 1f
-            )
-            x += gridSpacing
-        }
+    Spacer(
+        modifier = modifier
+            .fillMaxSize()
+            .drawWithCache {
+                val gridSpacing = 36.dp.toPx()
+                val scanlineSpacing = 10.dp.toPx()
+                val gridColor = HudGridLine.copy(alpha = 0.05f)
+                val scanColor = SystemManaCyan.copy(alpha = 0.025f)
 
-        val scanlineSpacing = 8.dp.toPx()
-        var y = 0f
-        while (y < size.height) {
-            drawLine(
-                color = SystemManaCyan.copy(alpha = 0.025f),
-                start = Offset(0f, y),
-                end = Offset(size.width, y),
-                strokeWidth = 1f
-            )
-            y += scanlineSpacing
-        }
-    }
+                onDrawBehind {
+                    var x = 0f
+                    while (x < size.width) {
+                        drawLine(
+                            color = gridColor,
+                            start = Offset(x, 0f),
+                            end = Offset(x, size.height),
+                            strokeWidth = 1f
+                        )
+                        x += gridSpacing
+                    }
+
+                    var y = 0f
+                    while (y < size.height) {
+                        drawLine(
+                            color = scanColor,
+                            start = Offset(0f, y),
+                            end = Offset(size.width, y),
+                            strokeWidth = 1f
+                        )
+                        y += scanlineSpacing
+                    }
+                }
+            }
+    )
 }
 
 @Composable
@@ -523,26 +539,34 @@ fun ManaCoreTimerDial(
         label = "mana_core_progress"
     )
 
-    val infiniteTransition = rememberInfiniteTransition(label = "mana_core_rotation")
-    val rotationDegrees by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 20000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "outer_ring_rotation"
-    )
-
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.45f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1200, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "core_pulse"
-    )
+    val rotationDegrees: Float
+    val pulseAlpha: Float
+    if (isTimerRunning) {
+        val infiniteTransition = rememberInfiniteTransition(label = "mana_core_rotation")
+        val rot by infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 20000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "outer_ring_rotation"
+        )
+        val pulse by infiniteTransition.animateFloat(
+            initialValue = 0.45f,
+            targetValue = 1.0f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1200, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "core_pulse"
+        )
+        rotationDegrees = rot
+        pulseAlpha = pulse
+    } else {
+        rotationDegrees = 0f
+        pulseAlpha = 1f
+    }
 
     val primaryDialColor = when {
         timerPhase == TimerPhase.REWARD_UNLOCK -> SovereignRewardGold
