@@ -85,6 +85,7 @@ object FocusRepository {
     private const val KEY_LAST_QUEST_DATE = "daily_quests_last_date"
     private const val KEY_GEMINI_API_KEY = "gemini_api_key_custom"
     private const val KEY_LAST_ARBITER_VERDICT_JSON = "last_arbiter_verdict_json"
+    private const val KEY_FOCUS_SESSION_END_EPOCH = "focus_session_end_epoch"
 
     // Minimum scientific focus threshold: 5 minutes
     const val MIN_FOCUS_THRESHOLD_MINUTES = 5
@@ -234,17 +235,41 @@ object FocusRepository {
 
         val focusMins = sharedPrefs.getInt(KEY_FOCUS_MINUTES, 35)
         _focusDurationMinutes.value = focusMins
-        if (_timerPhase.value == TimerPhase.IDLE && !_isTimerRunning.value) {
-            _remainingSeconds.value = focusMins * 60
-            _totalPhaseSeconds.value = focusMins * 60
-        }
 
         _boundQuestId.value = sharedPrefs.getString(KEY_BOUND_QUEST_ID, null)?.takeIf { it.isNotBlank() }
 
         val forceLock = sharedPrefs.getBoolean(KEY_FORCE_DUNGEON_LOCK, false)
-        val blockingActive = sharedPrefs.getBoolean(KEY_IS_BLOCKING_ACTIVE, false) || forceLock
+        val endEpoch = sharedPrefs.getLong(KEY_FOCUS_SESSION_END_EPOCH, 0L)
+        val now = System.currentTimeMillis()
+        val isTimerActive = if (endEpoch > 0L) {
+            if (now < endEpoch) {
+                val remSecs = ((endEpoch - now) / 1000L).toInt().coerceAtLeast(1)
+                _remainingSeconds.value = remSecs
+                _totalPhaseSeconds.value = focusMins * 60
+                _timerPhase.value = TimerPhase.FOCUS_LOCK
+                _isTimerRunning.value = true
+                true
+            } else {
+                _isTimerRunning.value = false
+                _timerPhase.value = TimerPhase.IDLE
+                _remainingSeconds.value = focusMins * 60
+                _totalPhaseSeconds.value = focusMins * 60
+                sharedPrefs.edit()
+                    .putBoolean(KEY_IS_BLOCKING_ACTIVE, false)
+                    .putLong(KEY_FOCUS_SESSION_END_EPOCH, 0L)
+                    .apply()
+                false
+            }
+        } else {
+            if (_timerPhase.value == TimerPhase.IDLE && !_isTimerRunning.value) {
+                _remainingSeconds.value = focusMins * 60
+                _totalPhaseSeconds.value = focusMins * 60
+            }
+            sharedPrefs.getBoolean(KEY_IS_BLOCKING_ACTIVE, false)
+        }
+
         _forceDungeonLockTestMode.value = forceLock
-        _isBlockingActive.value = blockingActive
+        _isBlockingActive.value = forceLock || isTimerActive
 
         _sealYoutubeShorts.value = sharedPrefs.getBoolean(KEY_SEAL_SHORTS, true)
         _sealInstagramReels.value = sharedPrefs.getBoolean(KEY_SEAL_REELS, true)
@@ -309,12 +334,16 @@ object FocusRepository {
 
     fun startFocusDungeon() {
         val totalSecs = _focusDurationMinutes.value * 60
+        val endEpoch = System.currentTimeMillis() + (totalSecs * 1000L)
         _timerPhase.value = TimerPhase.FOCUS_LOCK
         _totalPhaseSeconds.value = totalSecs
         _remainingSeconds.value = totalSecs
         _isTimerRunning.value = true
         _isBlockingActive.value = true
-        prefs?.edit()?.putBoolean(KEY_IS_BLOCKING_ACTIVE, true)?.apply()
+        prefs?.edit()
+            ?.putBoolean(KEY_IS_BLOCKING_ACTIVE, true)
+            ?.putLong(KEY_FOCUS_SESSION_END_EPOCH, endEpoch)
+            ?.apply()
 
         val boundQuest = _dailyQuests.value.find { it.id == _boundQuestId.value && !it.isCompleted }
         val expectedTokens = calculateTokensForFocusMinutes(_focusDurationMinutes.value)
@@ -328,6 +357,17 @@ object FocusRepository {
         )
     }
 
+    fun isDungeonLockActive(now: Long = System.currentTimeMillis()): Boolean {
+        if (_forceDungeonLockTestMode.value) return true
+        val sp = prefs ?: return _isBlockingActive.value
+        if (sp.getBoolean(KEY_FORCE_DUNGEON_LOCK, false)) return true
+        val endEpoch = sp.getLong(KEY_FOCUS_SESSION_END_EPOCH, 0L)
+        if (endEpoch > 0L) {
+            return now < endEpoch
+        }
+        return sp.getBoolean(KEY_IS_BLOCKING_ACTIVE, false)
+    }
+
     fun togglePauseResumeTimer() {
         if (_timerPhase.value == TimerPhase.IDLE) {
             startFocusDungeon()
@@ -338,7 +378,15 @@ object FocusRepository {
         if (_timerPhase.value == TimerPhase.FOCUS_LOCK) {
             val shouldBlock = nextRunning || _forceDungeonLockTestMode.value
             _isBlockingActive.value = shouldBlock
-            prefs?.edit()?.putBoolean(KEY_IS_BLOCKING_ACTIVE, shouldBlock)?.apply()
+            val endEpoch = if (nextRunning) {
+                System.currentTimeMillis() + (_remainingSeconds.value * 1000L)
+            } else {
+                0L
+            }
+            prefs?.edit()
+                ?.putBoolean(KEY_IS_BLOCKING_ACTIVE, shouldBlock)
+                ?.putLong(KEY_FOCUS_SESSION_END_EPOCH, endEpoch)
+                ?.apply()
         }
     }
 
@@ -364,7 +412,10 @@ object FocusRepository {
         _remainingSeconds.value = focusSecs
         val shouldBlock = _forceDungeonLockTestMode.value
         _isBlockingActive.value = shouldBlock
-        prefs?.edit()?.putBoolean(KEY_IS_BLOCKING_ACTIVE, shouldBlock)?.apply()
+        prefs?.edit()
+            ?.putBoolean(KEY_IS_BLOCKING_ACTIVE, shouldBlock)
+            ?.putLong(KEY_FOCUS_SESSION_END_EPOCH, 0L)
+            ?.apply()
 
         if (earnedPartialTokens > 0) {
             depositRewardTokens(earnedPartialTokens)

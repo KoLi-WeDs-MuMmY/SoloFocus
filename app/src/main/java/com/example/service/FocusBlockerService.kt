@@ -40,17 +40,14 @@ class FocusBlockerService : AccessibilityService() {
 
         try {
             val info = serviceInfo ?: AccessibilityServiceInfo()
-            info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
-                AccessibilityEvent.TYPE_WINDOWS_CHANGED or
-                AccessibilityEvent.TYPE_VIEW_SCROLLED
+            info.eventTypes = AccessibilityEvent.TYPES_ALL_MASK
             info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
             info.flags = AccessibilityServiceInfo.DEFAULT or
                 AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
                 AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
                 AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
-            info.notificationTimeout = 50L
-            info.packageNames = null // Listen globally across all installed packages
+            info.notificationTimeout = 40L
+            info.packageNames = null // Monitor all applications globally
             serviceInfo = info
         } catch (_: Exception) {
             // Fallback to XML configuration if OEM restricts runtime update
@@ -60,59 +57,84 @@ class FocusBlockerService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
 
+        val ownPackage = applicationContext.packageName
         val eventPkg = event.packageName?.toString()?.trim()
-        if (eventPkg.isNullOrBlank()) return
 
         // 1. RECURSION GUARD: If the event originates from our own application or BlockerActivity,
         // NEVER trigger blocking!
-        val ownPackage = applicationContext.packageName
-        if (eventPkg == ownPackage ||
-            eventPkg == "com.example" ||
-            eventPkg.startsWith("com.aistudio.systemfocus") ||
-            eventPkg.contains("systemfocus", ignoreCase = true)
+        if (!eventPkg.isNullOrBlank() && (
+                eventPkg == ownPackage ||
+                eventPkg == "com.example" ||
+                eventPkg.startsWith("com.aistudio.systemfocus") ||
+                eventPkg.contains("systemfocus", ignoreCase = true)
+            )
         ) {
             return
         }
 
-        // 2. SYSTEM GUARDS: Never block System UI, Settings, Permission Controller, Keyboard, or Home Launcher
-        if (isExemptSystemOrSelfPackage(eventPkg)) {
+        // Also verify rootInActiveWindow: if our own app is currently in foreground, abort
+        val activeWindowPkg = try {
+            rootInActiveWindow?.packageName?.toString()?.trim()
+        } catch (_: Exception) {
+            null
+        }
+
+        if (!activeWindowPkg.isNullOrBlank() && (
+                activeWindowPkg == ownPackage ||
+                activeWindowPkg == "com.example" ||
+                activeWindowPkg.startsWith("com.aistudio.systemfocus") ||
+                activeWindowPkg.contains("systemfocus", ignoreCase = true)
+            )
+        ) {
             return
         }
 
-        // Ensure live SharedPreferences state is loaded
+        val targetPkg = eventPkg ?: activeWindowPkg ?: return
+
+        // 2. SYSTEM GUARDS: Never block System UI, Settings, Permission Controller, Keyboard, or Home Launcher
+        if (isExemptSystemOrSelfPackage(targetPkg)) {
+            return
+        }
+
+        // Ensure live SharedPreferences and session state is loaded
         FocusRepository.init(applicationContext)
 
         val now = System.currentTimeMillis()
-        val isBlockingActive = FocusRepository.isBlockingActive.value
+        val isBlockingActive = FocusRepository.isDungeonLockActive(now)
         val blockedPackages = FocusRepository.blockedPackages.value
 
-        // 3. FAST-PATH APP BLOCKING ON WINDOW STATE CHANGED (New Activity / App Foregrounded):
-        if (isBlockingActive && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            if (blockedPackages.contains(eventPkg) &&
-                !FocusRepository.isPackageTemporarilyUnsealed(eventPkg, now)
-            ) {
-                // Debounce check so we don't spam activity launches
-                if (now - lastBlockActionTime < 1000L) {
-                    return
-                }
-                lastBlockActionTime = now
-
-                FocusRepository.recordBlockedInterception("Sealed App Intercepted: $eventPkg")
-
-                // Launch full-screen BlockerActivity with NEW_TASK | CLEAR_TOP
-                launchBlockerActivity(
-                    targetPackage = eventPkg,
-                    reason = "SEALED_APP"
-                )
-
-                // Also trigger transient penalty banner
-                triggerSystemPenaltyOverlayOrToast(
-                    headerTitle = "[ ! SYSTEM PENALTY: ACCESS DENIED ]",
-                    subtitle = "[ ! SYSTEM PENALTY: DUNGEON LOCK ACTIVE ]",
-                    detail = "TARGET SEALED: $eventPkg\nSpend Reward Tokens to unseal this app or complete your Focus session."
-                )
+        // 3. ROCK-SOLID BACKGROUND APP BLOCKING:
+        // Works seamlessly whether our app is in background, minimized, or killed
+        if (isBlockingActive &&
+            blockedPackages.contains(targetPkg) &&
+            !FocusRepository.isPackageTemporarilyUnsealed(targetPkg, now)
+        ) {
+            if (now - lastBlockActionTime < 500L) {
                 return
             }
+            lastBlockActionTime = now
+
+            FocusRepository.recordBlockedInterception("Sealed App Intercepted: $targetPkg")
+
+            // CRITICAL STEP 1: AccessibilityService system-level kick to Android Home screen!
+            // This is universally permitted by Android OS and works instantly from the background.
+            performGlobalAction(GLOBAL_ACTION_HOME)
+
+            // CRITICAL STEP 2: Display the full-screen Crimson System Penalty Overlay
+            triggerSystemPenaltyOverlayOrToast(
+                headerTitle = "[ ! SYSTEM PENALTY: ACCESS DENIED ]",
+                subtitle = "[ ! SYSTEM PENALTY: DUNGEON LOCK ACTIVE ]",
+                detail = "TARGET SEALED: $targetPkg\nSpend Reward Tokens to unseal this app or complete your Focus session."
+            )
+
+            // CRITICAL STEP 3: Attempt to launch BlockerActivity from Home screen
+            mainHandler.postDelayed({
+                launchBlockerActivity(
+                    targetPackage = targetPkg,
+                    reason = "SEALED_APP"
+                )
+            }, 120L)
+            return
         }
 
         // 4. REAL SHORTS & REELS BLOCKING (Multi-Window Node Scanner)
@@ -124,15 +146,14 @@ class FocusBlockerService : AccessibilityService() {
         }
 
         // Respect per-app unseal for YouTube or Instagram
-        if (FocusRepository.isPackageTemporarilyUnsealed(eventPkg, now)) {
+        if (FocusRepository.isPackageTemporarilyUnsealed(targetPkg, now)) {
             return
         }
 
-        // Only scan within YouTube or Instagram packages
-        val isYoutube = eventPkg.equals("com.google.android.youtube", ignoreCase = true) ||
-            eventPkg.contains("youtube", ignoreCase = true)
-        val isInstagram = eventPkg.equals("com.instagram.android", ignoreCase = true) ||
-            eventPkg.contains("instagram", ignoreCase = true)
+        val isYoutube = targetPkg.equals("com.google.android.youtube", ignoreCase = true) ||
+            targetPkg.contains("youtube", ignoreCase = true)
+        val isInstagram = targetPkg.equals("com.instagram.android", ignoreCase = true) ||
+            targetPkg.contains("instagram", ignoreCase = true)
 
         if (!isYoutube && !isInstagram) {
             return
@@ -142,46 +163,63 @@ class FocusBlockerService : AccessibilityService() {
         if (rootNodes.isEmpty()) return
 
         for (rootNode in rootNodes) {
-            val nodePkg = rootNode.packageName?.toString()?.takeIf { it.isNotBlank() } ?: eventPkg
+            val nodePkg = rootNode.packageName?.toString()?.takeIf { it.isNotBlank() } ?: targetPkg
             if (FocusRepository.isPackageTemporarilyUnsealed(nodePkg, now)) {
                 continue
             }
 
             if (sealShorts && isYoutube && isYoutubeShortsDetected(nodePkg, rootNode)) {
-                if (now - lastBlockActionTime < 1200L) return
+                if (now - lastBlockActionTime < 800L) return
                 lastBlockActionTime = now
 
-                FocusRepository.recordBlockedInterception("YouTube Shorts Sealed -> Kick-Back")
-                performGlobalAction(GLOBAL_ACTION_BACK)
+                FocusRepository.recordBlockedInterception("YouTube Shorts Sealed -> Kick-Out")
 
-                launchBlockerActivity(
-                    targetPackage = nodePkg,
-                    reason = "SHORTS_REELS"
-                )
+                // If YouTube itself is on the blocked apps list, kick out to Home, otherwise back to normal feed
+                if (isBlockingActive && blockedPackages.contains(nodePkg)) {
+                    performGlobalAction(GLOBAL_ACTION_HOME)
+                } else {
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                }
+
                 triggerSystemPenaltyOverlayOrToast(
                     headerTitle = "[ ! SYSTEM PENALTY: ACCESS DENIED ]",
                     subtitle = "[ ! SYSTEM PENALTY: SHORTS SEALED ]",
                     detail = "YOUTUBE SHORTS FEED SEALED BY THE SYSTEM.\nShort-form scrolling is forbidden."
                 )
+
+                mainHandler.postDelayed({
+                    launchBlockerActivity(
+                        targetPackage = nodePkg,
+                        reason = "SHORTS_REELS"
+                    )
+                }, 120L)
                 return
             }
 
             if (sealReels && isInstagram && isInstagramReelsDetected(nodePkg, rootNode)) {
-                if (now - lastBlockActionTime < 1200L) return
+                if (now - lastBlockActionTime < 800L) return
                 lastBlockActionTime = now
 
-                FocusRepository.recordBlockedInterception("Instagram Reels Sealed -> Kick-Back")
-                performGlobalAction(GLOBAL_ACTION_BACK)
+                FocusRepository.recordBlockedInterception("Instagram Reels Sealed -> Kick-Out")
 
-                launchBlockerActivity(
-                    targetPackage = nodePkg,
-                    reason = "SHORTS_REELS"
-                )
+                if (isBlockingActive && blockedPackages.contains(nodePkg)) {
+                    performGlobalAction(GLOBAL_ACTION_HOME)
+                } else {
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                }
+
                 triggerSystemPenaltyOverlayOrToast(
                     headerTitle = "[ ! SYSTEM PENALTY: ACCESS DENIED ]",
                     subtitle = "[ ! SYSTEM PENALTY: REELS SEALED ]",
                     detail = "INSTAGRAM REELS FEED SEALED BY THE SYSTEM.\nShort-form scrolling is forbidden."
                 )
+
+                mainHandler.postDelayed({
+                    launchBlockerActivity(
+                        targetPackage = nodePkg,
+                        reason = "SHORTS_REELS"
+                    )
+                }, 120L)
                 return
             }
         }
@@ -196,8 +234,7 @@ class FocusBlockerService : AccessibilityService() {
             }
             applicationContext.startActivity(intent)
         } catch (_: Exception) {
-            // Fallback to sending home if activity launching has OEM restriction
-            performGlobalAction(GLOBAL_ACTION_HOME)
+            // If background activity start is restricted by OEM, the user is already on the Home screen
         }
     }
 
@@ -218,7 +255,6 @@ class FocusBlockerService : AccessibilityService() {
             pkg == "com.android.settings" ||
             pkg.contains("inputmethod", ignoreCase = true) ||
             pkg.contains("permissioncontroller", ignoreCase = true) ||
-            pkg.contains("launcher", ignoreCase = true) ||
             (homePkg != null && pkg == homePkg)
     }
 
@@ -256,14 +292,20 @@ class FocusBlockerService : AccessibilityService() {
                 val overlayContainer = LinearLayout(applicationContext).apply {
                     orientation = LinearLayout.VERTICAL
                     gravity = Gravity.CENTER
-                    setBackgroundColor(Color.parseColor("#EB050811"))
-                    setPadding(64, 64, 64, 64)
+                    setBackgroundColor(Color.parseColor("#F0050811"))
+                    setPadding(56, 56, 56, 56)
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener {
+                        performGlobalAction(GLOBAL_ACTION_HOME)
+                        removePenaltyOverlay()
+                    }
                 }
 
                 val cardDrawable = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
                     setColor(Color.parseColor("#F51A050D"))
-                    setStroke(6, Color.parseColor("#FFFF1744"))
+                    setStroke(5, Color.parseColor("#FFFF1744"))
                     cornerRadius = 12f
                 }
 
@@ -271,25 +313,25 @@ class FocusBlockerService : AccessibilityService() {
                     orientation = LinearLayout.VERTICAL
                     gravity = Gravity.CENTER
                     background = cardDrawable
-                    setPadding(56, 64, 56, 64)
+                    setPadding(48, 56, 48, 56)
                 }
 
                 val alertHeaderView = TextView(applicationContext).apply {
                     text = headerTitle
                     setTextColor(Color.parseColor("#FFFF1744"))
                     typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
                     gravity = Gravity.CENTER
-                    letterSpacing = 0.1f
+                    letterSpacing = 0.08f
                 }
 
                 val subHeaderView = TextView(applicationContext).apply {
                     text = subtitle
                     setTextColor(Color.parseColor("#FFFFD600"))
                     typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
                     gravity = Gravity.CENTER
-                    setPadding(0, 24, 0, 24)
+                    setPadding(0, 20, 0, 20)
                 }
 
                 val detailView = TextView(applicationContext).apply {
@@ -300,19 +342,40 @@ class FocusBlockerService : AccessibilityService() {
                     gravity = Gravity.CENTER
                 }
 
-                val countdownNoteView = TextView(applicationContext).apply {
-                    text = "[ ENFORCING SYSTEM LOCKOUT... ]"
-                    setTextColor(Color.parseColor("#FF00E5FF"))
+                val returnHomeBtn = TextView(applicationContext).apply {
+                    text = "[ RETURN TO HOME SCREEN ]"
+                    setTextColor(Color.parseColor("#FFFF1744"))
                     typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
                     gravity = Gravity.CENTER
-                    setPadding(0, 36, 0, 0)
+                    val btnBg = GradientDrawable().apply {
+                        setColor(Color.parseColor("#33FF1744"))
+                        setStroke(3, Color.parseColor("#FFFF1744"))
+                        cornerRadius = 8f
+                    }
+                    background = btnBg
+                    setPadding(32, 20, 32, 20)
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener {
+                        performGlobalAction(GLOBAL_ACTION_HOME)
+                        removePenaltyOverlay()
+                    }
+                }
+
+                val spacer = View(applicationContext).apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        32
+                    )
                 }
 
                 innerBox.addView(alertHeaderView)
                 innerBox.addView(subHeaderView)
                 innerBox.addView(detailView)
-                innerBox.addView(countdownNoteView)
+                innerBox.addView(spacer)
+                innerBox.addView(returnHomeBtn)
+
                 overlayContainer.addView(
                     innerBox,
                     LinearLayout.LayoutParams(
@@ -332,8 +395,7 @@ class FocusBlockerService : AccessibilityService() {
                     WindowManager.LayoutParams.MATCH_PARENT,
                     WindowManager.LayoutParams.MATCH_PARENT,
                     layoutFlag,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                         WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
                     PixelFormat.TRANSLUCENT
                 ).apply {
@@ -344,7 +406,7 @@ class FocusBlockerService : AccessibilityService() {
                 activePenaltyOverlayView = overlayContainer
 
                 mainHandler.removeCallbacks(dismissOverlayRunnable)
-                mainHandler.postDelayed(dismissOverlayRunnable, 2500L)
+                mainHandler.postDelayed(dismissOverlayRunnable, 3000L)
             } catch (_: Exception) {
                 Toast.makeText(
                     applicationContext,
