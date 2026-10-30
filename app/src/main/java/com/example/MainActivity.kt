@@ -44,6 +44,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.data.ArbiterVerdictResult
+import com.example.data.FocusRepository
 import com.example.ui.FocusViewModel
 import com.example.ui.SystemHudTab
 import com.example.ui.components.PlayerStatusHeaderCard
@@ -64,6 +66,7 @@ import com.example.ui.theme.SystemWindowSurface
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        FocusRepository.init(applicationContext)
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme {
@@ -85,10 +88,14 @@ fun SystemFocusHudApp(
     val totalPhaseSeconds by viewModel.totalPhaseSeconds.collectAsStateWithLifecycle()
     val isTimerRunning by viewModel.isTimerRunning.collectAsStateWithLifecycle()
     val isBlockingActive by viewModel.isBlockingActive.collectAsStateWithLifecycle()
+    val forceDungeonLockTestMode by viewModel.forceDungeonLockTestMode.collectAsStateWithLifecycle()
     val sealYoutubeShorts by viewModel.sealYoutubeShorts.collectAsStateWithLifecycle()
     val sealInstagramReels by viewModel.sealInstagramReels.collectAsStateWithLifecycle()
     val blockedPackages by viewModel.blockedPackages.collectAsStateWithLifecycle()
     val dailyQuests by viewModel.dailyQuests.collectAsStateWithLifecycle()
+    val geminiApiKey by viewModel.geminiApiKey.collectAsStateWithLifecycle()
+    val isArbiterEvaluating by viewModel.isArbiterEvaluating.collectAsStateWithLifecycle()
+    val latestArbiterVerdict by viewModel.latestArbiterVerdict.collectAsStateWithLifecycle()
     val activeBanner by viewModel.activeBanner.collectAsStateWithLifecycle()
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
     val isAccessibilityEnabled by viewModel.isAccessibilityServiceEnabled.collectAsStateWithLifecycle()
@@ -107,7 +114,6 @@ fun SystemFocusHudApp(
             .background(AbyssalBackground)
             .safeDrawingPadding()
     ) {
-        // Subtle Canvas horizontal scanlines & tactical HUD grid background
         SystemBackgroundScanlines()
 
         BoxWithConstraints(
@@ -118,7 +124,6 @@ fun SystemFocusHudApp(
             val isExpandedConsole = maxWidth >= 600.dp
 
             if (isExpandedConsole) {
-                // 2-Pane Hunter Command Console for Tablets / Landscape
                 Row(
                     modifier = Modifier.fillMaxSize(),
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -157,8 +162,12 @@ fun SystemFocusHudApp(
                             totalPhaseSeconds = totalPhaseSeconds,
                             isTimerRunning = isTimerRunning,
                             isBlockingActive = isBlockingActive,
+                            forceDungeonLockTestMode = forceDungeonLockTestMode,
                             completedDungeons = playerStats.completedDungeons,
                             dailyQuests = dailyQuests,
+                            geminiApiKey = geminiApiKey,
+                            isArbiterEvaluating = isArbiterEvaluating,
+                            latestArbiterVerdict = latestArbiterVerdict,
                             isAccessibilityEnabled = isAccessibilityEnabled,
                             sealYoutubeShorts = sealYoutubeShorts,
                             sealInstagramReels = sealInstagramReels,
@@ -171,7 +180,6 @@ fun SystemFocusHudApp(
                     }
                 }
             } else {
-                // Single-Column System Window Stack with Bottom HUD Dock for Phones
                 Column(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -196,8 +204,12 @@ fun SystemFocusHudApp(
                             totalPhaseSeconds = totalPhaseSeconds,
                             isTimerRunning = isTimerRunning,
                             isBlockingActive = isBlockingActive,
+                            forceDungeonLockTestMode = forceDungeonLockTestMode,
                             completedDungeons = playerStats.completedDungeons,
                             dailyQuests = dailyQuests,
+                            geminiApiKey = geminiApiKey,
+                            isArbiterEvaluating = isArbiterEvaluating,
+                            latestArbiterVerdict = latestArbiterVerdict,
                             isAccessibilityEnabled = isAccessibilityEnabled,
                             sealYoutubeShorts = sealYoutubeShorts,
                             sealInstagramReels = sealInstagramReels,
@@ -229,8 +241,12 @@ private fun ActiveTabContent(
     totalPhaseSeconds: Int,
     isTimerRunning: Boolean,
     isBlockingActive: Boolean,
+    forceDungeonLockTestMode: Boolean,
     completedDungeons: Int,
     dailyQuests: List<com.example.data.DailyQuest>,
+    geminiApiKey: String,
+    isArbiterEvaluating: Boolean,
+    latestArbiterVerdict: ArbiterVerdictResult?,
     isAccessibilityEnabled: Boolean,
     sealYoutubeShorts: Boolean,
     sealInstagramReels: Boolean,
@@ -261,8 +277,13 @@ private fun ActiveTabContent(
         SystemHudTab.DAILY_QUESTS -> {
             DailyQuestsScreen(
                 quests = dailyQuests,
+                savedApiKey = geminiApiKey,
+                isArbiterEvaluating = isArbiterEvaluating,
+                latestArbiterVerdict = latestArbiterVerdict,
+                onSaveApiKey = viewModel::saveGeminiApiKey,
+                onSubmitQuestToArbiter = viewModel::submitQuestToArbiter,
+                onDismissArbiterVerdict = viewModel::dismissArbiterVerdictPopup,
                 onToggleQuest = viewModel::toggleQuest,
-                onAddQuest = viewModel::addQuest,
                 onDeleteQuest = viewModel::deleteQuest,
                 onResetDailyQuests = viewModel::resetDailyQuests
             )
@@ -271,6 +292,7 @@ private fun ActiveTabContent(
             PenaltySealsScreen(
                 isAccessibilityEnabled = isAccessibilityEnabled,
                 isBlockingActive = isBlockingActive,
+                forceDungeonLockTestMode = forceDungeonLockTestMode,
                 sealYoutubeShorts = sealYoutubeShorts,
                 sealInstagramReels = sealInstagramReels,
                 blockedPackages = blockedPackages,
@@ -278,7 +300,7 @@ private fun ActiveTabContent(
                 searchQuery = appSearchQuery,
                 lastBlockedEventDescription = lastBlockedEventDescription,
                 onRefreshAccessibilityStatus = viewModel::refreshAccessibilityStatus,
-                onToggleManualDungeonLock = viewModel::setManualDungeonLock,
+                onToggleForceDungeonLockTestMode = viewModel::setForceDungeonLockTestMode,
                 onToggleSealYoutubeShorts = viewModel::setSealYoutubeShorts,
                 onToggleSealInstagramReels = viewModel::setSealInstagramReels,
                 onToggleBlockedPackage = viewModel::toggleBlockedPackage,

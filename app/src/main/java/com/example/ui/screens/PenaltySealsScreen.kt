@@ -69,6 +69,7 @@ import com.example.ui.theme.SystemWindowSurfaceElevated
 fun PenaltySealsScreen(
     isAccessibilityEnabled: Boolean,
     isBlockingActive: Boolean,
+    forceDungeonLockTestMode: Boolean,
     sealYoutubeShorts: Boolean,
     sealInstagramReels: Boolean,
     blockedPackages: Set<String>,
@@ -76,7 +77,7 @@ fun PenaltySealsScreen(
     searchQuery: String,
     lastBlockedEventDescription: String?,
     onRefreshAccessibilityStatus: () -> Unit,
-    onToggleManualDungeonLock: (Boolean) -> Unit,
+    onToggleForceDungeonLockTestMode: (Boolean) -> Unit,
     onToggleSealYoutubeShorts: (Boolean) -> Unit,
     onToggleSealInstagramReels: (Boolean) -> Unit,
     onToggleBlockedPackage: (String) -> Unit,
@@ -158,9 +159,9 @@ fun PenaltySealsScreen(
 
                     Text(
                         text = if (isAccessibilityEnabled) {
-                            "STATUS: ONLINE • FocusBlockerService has active System Authority to enforce app & Shorts/Reels seals."
+                            "STATUS: ONLINE • FocusBlockerService has active System Authority to enforce app & Shorts/Reels seals even when the app UI is closed."
                         } else {
-                            "STATUS: OFFLINE • Grant Accessibility Authority so the System can intercept distracting apps, YouTube Shorts, and Instagram Reels."
+                            "STATUS: OFFLINE • Enable 'System Authority: Focus & Shorts Blocker' in Android Accessibility Settings to enforce real app and Shorts/Reels blocking."
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = HudTextPrimary
@@ -201,7 +202,7 @@ fun PenaltySealsScreen(
             }
         }
 
-        // 2. Short-Form Video & Manual Dungeon Lock Seals Card
+        // 2. Short-Form Video & [ FORCE DUNGEON LOCK (TEST MODE) ] Seals Card
         item {
             SystemWindowCard(
                 modifier = Modifier
@@ -231,10 +232,22 @@ fun PenaltySealsScreen(
                         )
                     }
 
+                    // [ FORCE DUNGEON LOCK (TEST MODE) ]
+                    SystemSealToggleRow(
+                        title = "[ FORCE DUNGEON LOCK (TEST MODE) ]",
+                        subtitle = "Immediately lock all sealed apps and Shorts/Reels right now without waiting for the timer.",
+                        checked = forceDungeonLockTestMode || isBlockingActive,
+                        onCheckedChange = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onToggleForceDungeonLockTestMode(it)
+                        },
+                        testTag = "force_dungeon_lock_switch"
+                    )
+
                     // [ SEAL YOUTUBE SHORTS ]
                     SystemSealToggleRow(
                         title = stringResource(id = R.string.seal_youtube_shorts),
-                        subtitle = "Scans window nodes for 'reel_player' / 'Shorts' and triggers GLOBAL_ACTION_BACK.",
+                        subtitle = "Multi-window node scanner detects 'reel_player', 'shorts_', or selected 'Shorts' tab and triggers GLOBAL_ACTION_BACK.",
                         checked = sealYoutubeShorts,
                         onCheckedChange = {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -246,25 +259,13 @@ fun PenaltySealsScreen(
                     // [ SEAL INSTAGRAM REELS ]
                     SystemSealToggleRow(
                         title = stringResource(id = R.string.seal_instagram_reels),
-                        subtitle = "Scans window nodes for 'clips_viewer' / 'Reels' and triggers GLOBAL_ACTION_BACK.",
+                        subtitle = "Multi-window node scanner detects 'clips_viewer', 'reel_viewer', or active 'Reels' tab and triggers GLOBAL_ACTION_BACK.",
                         checked = sealInstagramReels,
                         onCheckedChange = {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             onToggleSealInstagramReels(it)
                         },
                         testTag = "seal_instagram_reels_switch"
-                    )
-
-                    // Manual Dungeon Lock Override
-                    SystemSealToggleRow(
-                        title = "[ MANUAL DUNGEON LOCK OVERRIDE ]",
-                        subtitle = "Immediately enforce app blocking even when the Focus Timer is on standby.",
-                        checked = isBlockingActive,
-                        onCheckedChange = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onToggleManualDungeonLock(it)
-                        },
-                        testTag = "manual_dungeon_lock_switch"
                     )
                 }
             }
@@ -312,7 +313,7 @@ fun PenaltySealsScreen(
 
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Sealed packages trigger GLOBAL_ACTION_HOME when opened during active Dungeon Lock.",
+                        text = "Sealed apps trigger GLOBAL_ACTION_HOME + '[ ! SYSTEM PENALTY: ACCESS DENIED UNTIL FOCUS COMPLETE ]' Toast when opened while locked.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = HudTextSecondary
                     )

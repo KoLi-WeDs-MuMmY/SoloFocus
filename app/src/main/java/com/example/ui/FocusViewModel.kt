@@ -7,10 +7,12 @@ import android.provider.Settings
 import android.text.TextUtils
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.ArbiterVerdictResult
 import com.example.data.DailyQuest
 import com.example.data.FocusRepository
 import com.example.data.PlayerStatsState
 import com.example.data.SystemAlertBanner
+import com.example.data.SystemArbiterClient
 import com.example.data.TimerPhase
 import com.example.service.FocusBlockerService
 import kotlinx.coroutines.Dispatchers
@@ -37,7 +39,7 @@ data class InstalledAppItem(
 class FocusViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
-        FocusRepository.initialize(application)
+        FocusRepository.init(application)
     }
 
     val playerStats: StateFlow<PlayerStatsState> = FocusRepository.playerStats
@@ -48,10 +50,12 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
     val totalPhaseSeconds: StateFlow<Int> = FocusRepository.totalPhaseSeconds
     val isTimerRunning: StateFlow<Boolean> = FocusRepository.isTimerRunning
     val isBlockingActive: StateFlow<Boolean> = FocusRepository.isBlockingActive
+    val forceDungeonLockTestMode: StateFlow<Boolean> = FocusRepository.forceDungeonLockTestMode
     val sealYoutubeShorts: StateFlow<Boolean> = FocusRepository.sealYoutubeShorts
     val sealInstagramReels: StateFlow<Boolean> = FocusRepository.sealInstagramReels
     val blockedPackages: StateFlow<Set<String>> = FocusRepository.blockedPackages
     val dailyQuests: StateFlow<List<DailyQuest>> = FocusRepository.dailyQuests
+    val geminiApiKey: StateFlow<String> = FocusRepository.geminiApiKey
     val activeBanner: StateFlow<SystemAlertBanner?> = FocusRepository.activeBanner
     val lastBlockedEventDescription: StateFlow<String?> = FocusRepository.lastBlockedEventDescription
 
@@ -66,6 +70,12 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _appSearchQuery = MutableStateFlow("")
     val appSearchQuery: StateFlow<String> = _appSearchQuery.asStateFlow()
+
+    private val _isArbiterEvaluating = MutableStateFlow(false)
+    val isArbiterEvaluating: StateFlow<Boolean> = _isArbiterEvaluating.asStateFlow()
+
+    private val _latestArbiterVerdict = MutableStateFlow<ArbiterVerdictResult?>(null)
+    val latestArbiterVerdict: StateFlow<ArbiterVerdictResult?> = _latestArbiterVerdict.asStateFlow()
 
     private var timerJob: Job? = null
 
@@ -133,8 +143,36 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         FocusRepository.toggleQuestCompletion(questId)
     }
 
-    fun addQuest(title: String, subtitle: String) {
-        FocusRepository.addCustomQuest(title, subtitle)
+    fun saveGeminiApiKey(apiKey: String) {
+        FocusRepository.saveGeminiApiKey(apiKey)
+    }
+
+    /**
+     * Triggers strictly ONE single request to the Gemini 2.5 Flash System Arbiter (or offline
+     * heuristic fallback if no key/network is available) ONLY when the user explicitly clicks
+     * [ SUBMIT QUEST TO SYSTEM ].
+     */
+    fun submitQuestToArbiter(rawQuestTitle: String) {
+        val trimmed = rawQuestTitle.trim()
+        if (trimmed.isEmpty() || _isArbiterEvaluating.value) return
+
+        viewModelScope.launch {
+            _isArbiterEvaluating.value = true
+            try {
+                val result = SystemArbiterClient.evaluateQuestSingleRequest(
+                    rawQuestInput = trimmed,
+                    apiKey = geminiApiKey.value
+                )
+                FocusRepository.addApprovedArbiterQuest(result)
+                _latestArbiterVerdict.value = result
+            } finally {
+                _isArbiterEvaluating.value = false
+            }
+        }
+    }
+
+    fun dismissArbiterVerdictPopup() {
+        _latestArbiterVerdict.value = null
     }
 
     fun deleteQuest(questId: String) {
@@ -153,8 +191,8 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         FocusRepository.setSealInstagramReels(enabled)
     }
 
-    fun setManualDungeonLock(active: Boolean) {
-        FocusRepository.setManualDungeonLock(active)
+    fun setForceDungeonLockTestMode(active: Boolean) {
+        FocusRepository.setForceDungeonLockTestMode(active)
     }
 
     fun toggleBlockedPackage(packageName: String) {
@@ -171,6 +209,7 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshAccessibilityStatus() {
         val context = getApplication<Application>()
+        FocusRepository.init(context)
         _isAccessibilityServiceEnabled.value = checkAccessibilityEnabled(context)
     }
 
@@ -223,8 +262,6 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
                 emptyList()
             }
 
-            // Merge curated targets with discovered installed apps so the user always sees
-            // common distraction apps alongside all installed launcher apps on the device
             val mergedMap = linkedMapOf<String, InstalledAppItem>()
             curatedFallbackTargets.forEach { mergedMap[it.packageName] = it }
             discovered.forEach { mergedMap[it.packageName] = it }

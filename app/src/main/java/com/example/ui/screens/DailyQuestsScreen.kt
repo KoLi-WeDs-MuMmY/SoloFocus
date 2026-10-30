@@ -1,9 +1,14 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,9 +27,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Gavel
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Icon
@@ -48,9 +57,13 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import com.example.R
+import com.example.data.ArbiterVerdictResult
 import com.example.data.DailyQuest
 import com.example.ui.components.SystemHudButton
 import com.example.ui.components.SystemWindowCard
@@ -68,25 +81,189 @@ import com.example.ui.theme.SystemWindowSurfaceElevated
 @Composable
 fun DailyQuestsScreen(
     quests: List<DailyQuest>,
+    savedApiKey: String,
+    isArbiterEvaluating: Boolean,
+    latestArbiterVerdict: ArbiterVerdictResult?,
+    onSaveApiKey: (String) -> Unit,
+    onSubmitQuestToArbiter: (String) -> Unit,
+    onDismissArbiterVerdict: () -> Unit,
     onToggleQuest: (String) -> Unit,
-    onAddQuest: (String, String) -> Unit,
     onDeleteQuest: (String) -> Unit,
     onResetDailyQuests: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val haptic = LocalHapticFeedback.current
     var newQuestTitle by rememberSaveable { mutableStateOf("") }
-    var newQuestDetail by rememberSaveable { mutableStateOf("") }
+    var isApiKeyConfigExpanded by rememberSaveable { mutableStateOf(false) }
+    var apiKeyInput by rememberSaveable(savedApiKey) { mutableStateOf(savedApiKey) }
+    var showApiKeyPlaintext by rememberSaveable { mutableStateOf(false) }
 
     val completedCount = quests.count { it.isCompleted }
     val totalCount = quests.size
     val allCleared = totalCount > 0 && completedCount == totalCount
 
+    // Glowing [ ! SYSTEM ARBITER VERDICT ] Popup Window
+    if (latestArbiterVerdict != null) {
+        SystemArbiterVerdictDialog(
+            verdictResult = latestArbiterVerdict,
+            onDismiss = onDismissArbiterVerdict
+        )
+    }
+
     Column(
         modifier = modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // Solo Leveling [ ! QUEST INFO ] Popup Window Frame
+        // 1. Sleek Collapsible [ API KEY CONFIG ] Box at Top of [ DAILY QUESTS ]
+        SystemWindowCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("api_key_config_box"),
+            borderStartColor = if (savedApiKey.isNotBlank()) SystemManaCyan else MonarchShadowPurple,
+            borderEndColor = RoyalSystemBlue,
+            contentPadding = 12.dp
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            isApiKeyConfigExpanded = !isApiKeyConfigExpanded
+                        }
+                        .testTag("api_key_config_toggle"),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Key,
+                            contentDescription = "API Key Config",
+                            tint = if (savedApiKey.isNotBlank()) SystemManaCyan else MonarchShadowPurple,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "[ API KEY CONFIG ]",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = if (savedApiKey.isNotBlank()) SystemManaCyan else MonarchShadowPurple,
+                            fontWeight = FontWeight.Black
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (savedApiKey.isNotBlank()) "• KEY LINKED" else "• OFFLINE FALLBACK",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (savedApiKey.isNotBlank()) SovereignRewardGold else HudTextSecondary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Icon(
+                        imageVector = if (isApiKeyConfigExpanded) {
+                            Icons.Default.ExpandLess
+                        } else {
+                            Icons.Default.ExpandMore
+                        },
+                        contentDescription = "Expand or Collapse API Key Config",
+                        tint = SystemManaCyan
+                    )
+                }
+
+                AnimatedVisibility(
+                    visible = isApiKeyConfigExpanded,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "Paste your free Gemini API Key for single-request System Arbiter judgments (gemini-2.5-flash). Stored strictly in local SharedPreferences.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = HudTextSecondary
+                        )
+
+                        OutlinedTextField(
+                            value = apiKeyInput,
+                            onValueChange = { apiKeyInput = it },
+                            placeholder = {
+                                Text(
+                                    text = "AIzaSy... (Free Gemini API Key)",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = HudTextMuted
+                                )
+                            },
+                            singleLine = true,
+                            visualTransformation = if (showApiKeyPlaintext) {
+                                VisualTransformation.None
+                            } else {
+                                PasswordVisualTransformation()
+                            },
+                            trailingIcon = {
+                                Text(
+                                    text = if (showApiKeyPlaintext) "HIDE" else "SHOW",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = SystemManaCyan,
+                                    modifier = Modifier
+                                        .clickable { showApiKeyPlaintext = !showApiKeyPlaintext }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            },
+                            shape = CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = SystemManaCyan,
+                                unfocusedBorderColor = RoyalSystemBlue.copy(alpha = 0.6f),
+                                focusedContainerColor = AbyssalBackground,
+                                unfocusedContainerColor = AbyssalBackground,
+                                focusedTextColor = HudTextPrimary,
+                                unfocusedTextColor = HudTextPrimary,
+                                cursorColor = SystemManaCyan
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("gemini_api_key_input")
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            SystemHudButton(
+                                text = "[ SAVE KEY TO SYSTEM ]",
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onSaveApiKey(apiKeyInput)
+                                    isApiKeyConfigExpanded = false
+                                },
+                                primaryColor = SystemManaCyan,
+                                secondaryColor = RoyalSystemBlue,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("save_api_key_button")
+                            )
+
+                            if (apiKeyInput.isNotBlank()) {
+                                SystemHudButton(
+                                    text = "[ CLEAR ]",
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        apiKeyInput = ""
+                                        onSaveApiKey("")
+                                    },
+                                    primaryColor = PenaltyDangerRed,
+                                    secondaryColor = MonarchShadowPurple
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Solo Leveling [ ! QUEST INFO ] Popup Window Frame
         SystemWindowCard(
             modifier = Modifier
                 .fillMaxWidth()
@@ -149,7 +326,7 @@ fun DailyQuestsScreen(
                             color = if (allCleared) SovereignRewardGold else SystemManaCyan.copy(alpha = 0.5f),
                             shape = CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp)
                         )
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -171,71 +348,61 @@ fun DailyQuestsScreen(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
-                // Add Custom Study / Work Goal Input Bar
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedTextField(
-                        value = newQuestTitle,
-                        onValueChange = { newQuestTitle = it },
-                        placeholder = {
-                            Text(
-                                text = "Assign study / work quest (+50 XP)...",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = HudTextMuted
-                            )
-                        },
-                        singleLine = true,
-                        shape = CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = SystemManaCyan,
-                            unfocusedBorderColor = RoyalSystemBlue.copy(alpha = 0.6f),
-                            focusedContainerColor = AbyssalBackground,
-                            unfocusedContainerColor = AbyssalBackground,
-                            focusedTextColor = HudTextPrimary,
-                            unfocusedTextColor = HudTextPrimary,
-                            cursorColor = SystemManaCyan
-                        ),
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("add_quest_input")
-                    )
-
-                    Box(
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .size(52.dp)
-                            .clip(CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp))
-                            .background(SystemManaCyan.copy(alpha = 0.2f))
-                            .border(
-                                width = 1.5.dp,
-                                color = SystemManaCyan,
-                                shape = CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp)
-                            )
-                            .clickable {
-                                if (newQuestTitle.isNotBlank()) {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onAddQuest(newQuestTitle, newQuestDetail)
-                                    newQuestTitle = ""
-                                    newQuestDetail = ""
-                                }
-                            }
-                            .testTag("add_quest_button"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = "Add Daily Quest",
-                            tint = SystemManaCyan
+                // Single-Request Gemini System Arbiter Quest Input + Submit Button
+                OutlinedTextField(
+                    value = newQuestTitle,
+                    onValueChange = { newQuestTitle = it },
+                    placeholder = {
+                        Text(
+                            text = "Propose a study/work quest to the System Arbiter...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = HudTextMuted
                         )
-                    }
-                }
+                    },
+                    singleLine = true,
+                    enabled = !isArbiterEvaluating,
+                    shape = CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = SystemManaCyan,
+                        unfocusedBorderColor = RoyalSystemBlue.copy(alpha = 0.6f),
+                        focusedContainerColor = AbyssalBackground,
+                        unfocusedContainerColor = AbyssalBackground,
+                        focusedTextColor = HudTextPrimary,
+                        unfocusedTextColor = HudTextPrimary,
+                        cursorColor = SystemManaCyan
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("add_quest_input")
+                )
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+
+                SystemHudButton(
+                    text = if (isArbiterEvaluating) {
+                        "[ SYSTEM ARBITER JUDGING... ]"
+                    } else {
+                        "[ SUBMIT QUEST TO SYSTEM ]"
+                    },
+                    enabled = newQuestTitle.isNotBlank() && !isArbiterEvaluating,
+                    onClick = {
+                        if (newQuestTitle.isNotBlank() && !isArbiterEvaluating) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            val submitted = newQuestTitle
+                            newQuestTitle = ""
+                            onSubmitQuestToArbiter(submitted)
+                        }
+                    },
+                    primaryColor = SystemManaCyan,
+                    secondaryColor = MonarchShadowPurple,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("submit_quest_to_system_button")
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
 
                 // Scrollable Quests List
                 LazyColumn(
@@ -260,7 +427,7 @@ fun DailyQuestsScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
                 // Mandatory Bottom System Warning Box
                 Box(
@@ -273,7 +440,7 @@ fun DailyQuestsScreen(
                             color = PenaltyDangerRed,
                             shape = CutCornerShape(topStart = 10.dp, bottomEnd = 10.dp)
                         )
-                        .padding(12.dp)
+                        .padding(10.dp)
                         .testTag("daily_quest_warning_box")
                 ) {
                     Row(
@@ -284,7 +451,7 @@ fun DailyQuestsScreen(
                             imageVector = Icons.Default.WarningAmber,
                             contentDescription = "Penalty Warning",
                             tint = PenaltyDangerRed,
-                            modifier = Modifier.size(22.dp)
+                            modifier = Modifier.size(20.dp)
                         )
                         Text(
                             text = stringResource(id = R.string.daily_quest_warning),
@@ -294,6 +461,172 @@ fun DailyQuestsScreen(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SystemArbiterVerdictDialog(
+    verdictResult: ArbiterVerdictResult,
+    onDismiss: () -> Unit
+) {
+    // Cyan for COMPLY, Monarch Purple for MODIFY, Crimson Red for DECLINE
+    val accentColor = when (verdictResult.verdict) {
+        "COMPLY" -> SystemManaCyan
+        "MODIFY" -> MonarchShadowPurple
+        else -> PenaltyDangerRed
+    }
+    val secondaryColor = when (verdictResult.verdict) {
+        "COMPLY" -> RoyalSystemBlue
+        "MODIFY" -> SystemManaCyan
+        else -> MonarchShadowPurple
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        SystemWindowCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("system_arbiter_verdict_dialog"),
+            borderStartColor = accentColor,
+            borderEndColor = secondaryColor,
+            surfaceColor = AbyssalBackground.copy(alpha = 0.98f),
+            contentPadding = 18.dp
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = if (verdictResult.verdict == "DECLINE") {
+                            Icons.Default.Gavel
+                        } else {
+                            Icons.Default.AutoAwesome
+                        },
+                        contentDescription = "System Arbiter Verdict",
+                        tint = accentColor,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Text(
+                        text = "[ ! SYSTEM ARBITER VERDICT ]",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = accentColor,
+                        fontWeight = FontWeight.Black
+                    )
+                }
+
+                // Verdict & XP Badge Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .clip(CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp))
+                            .background(accentColor.copy(alpha = 0.2f))
+                            .border(
+                                width = 1.5.dp,
+                                color = accentColor,
+                                shape = CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp)
+                            )
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = "VERDICT: ${verdictResult.verdict}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = accentColor,
+                            fontWeight = FontWeight.Black
+                        )
+                    }
+
+                    if (verdictResult.verdict != "DECLINE") {
+                        Box(
+                            modifier = Modifier
+                                .clip(CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp))
+                                .background(SovereignRewardGold.copy(alpha = 0.16f))
+                                .border(
+                                    width = 1.dp,
+                                    color = SovereignRewardGold,
+                                    shape = CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp)
+                                )
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = "+${verdictResult.xpReward} XP REWARD",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = SovereignRewardGold,
+                                fontWeight = FontWeight.Black
+                            )
+                        }
+                    }
+                }
+
+                if (verdictResult.verdict == "MODIFY") {
+                    Text(
+                        text = "SUBMITTED: \"${verdictResult.submittedQuestTitle}\"",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = HudTextSecondary
+                    )
+                }
+
+                // Final Approved / Modified / Rejected Quest Title Box
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp))
+                        .background(SystemWindowSurfaceElevated)
+                        .border(
+                            width = 1.dp,
+                            color = accentColor.copy(alpha = 0.6f),
+                            shape = CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp)
+                        )
+                        .padding(12.dp)
+                ) {
+                    Column {
+                        Text(
+                            text = when (verdictResult.verdict) {
+                                "COMPLY" -> "REGISTERED QUEST OBJECTIVE:"
+                                "MODIFY" -> "ESCALATED SYSTEM OBJECTIVE:"
+                                else -> "REJECTED INPUT:"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = accentColor,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = verdictResult.finalQuestTitle,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = HudTextPrimary,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                }
+
+                Text(
+                    text = verdictResult.systemMessage,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = HudTextPrimary
+                )
+
+                SystemHudButton(
+                    text = if (verdictResult.verdict == "DECLINE") {
+                        "[ ACKNOWLEDGE PENALTY ]"
+                    } else {
+                        "[ ACCEPT SYSTEM DIRECTIVE ]"
+                    },
+                    onClick = onDismiss,
+                    primaryColor = accentColor,
+                    secondaryColor = secondaryColor,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("arbiter_verdict_confirm_button")
+                )
             }
         }
     }
@@ -324,7 +657,11 @@ private fun DailyQuestItemRow(
     )
 
     val borderColor by animateColorAsState(
-        targetValue = if (quest.isCompleted) SovereignRewardGold else SystemManaCyan.copy(alpha = 0.6f),
+        targetValue = when {
+            quest.isCompleted -> SovereignRewardGold
+            quest.arbiterVerdict == "MODIFY" -> MonarchShadowPurple
+            else -> SystemManaCyan.copy(alpha = 0.6f)
+        },
         label = "quest_border_color"
     )
 
@@ -354,7 +691,6 @@ private fun DailyQuestItemRow(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.weight(1f)
         ) {
-            // Chamfered System Checkbox
             Box(
                 modifier = Modifier
                     .minimumInteractiveComponentSize()
@@ -417,6 +753,14 @@ private fun DailyQuestItemRow(
                         color = MonarchShadowPurple,
                         fontWeight = FontWeight.Black
                     )
+                    if (quest.arbiterVerdict != null) {
+                        Text(
+                            text = "[ ARBITER: ${quest.arbiterVerdict} ]",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (quest.arbiterVerdict == "MODIFY") MonarchShadowPurple else SystemManaCyan,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         }

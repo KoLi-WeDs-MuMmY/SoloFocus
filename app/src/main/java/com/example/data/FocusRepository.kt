@@ -36,7 +36,8 @@ data class DailyQuest(
     val subtitle: String,
     val xpReward: Int = 50,
     val isCompleted: Boolean = false,
-    val isStarter: Boolean = false
+    val isStarter: Boolean = false,
+    val arbiterVerdict: String? = null
 )
 
 data class PlayerStatsState(
@@ -64,10 +65,14 @@ object FocusRepository {
     private const val KEY_COMPLETED_DUNGEONS = "player_completed_dungeons"
     private const val KEY_FOCUS_MINUTES = "focus_duration_minutes"
     private const val KEY_REWARD_MINUTES = "reward_duration_minutes"
+    private const val KEY_IS_BLOCKING_ACTIVE = "is_blocking_active"
+    private const val KEY_FORCE_DUNGEON_LOCK = "force_dungeon_lock_test_mode"
     private const val KEY_SEAL_SHORTS = "seal_youtube_shorts"
     private const val KEY_SEAL_REELS = "seal_instagram_reels"
     private const val KEY_BLOCKED_PACKAGES = "blocked_packages"
     private const val KEY_QUESTS_JSON = "daily_quests_json"
+    private const val KEY_GEMINI_API_KEY = "gemini_api_key_custom"
+    private const val KEY_LAST_ARBITER_VERDICT_JSON = "last_arbiter_verdict_json"
 
     private var prefs: SharedPreferences? = null
 
@@ -93,7 +98,7 @@ object FocusRepository {
             id = "quest_code_study",
             title = "Algorithm & Core Skill Training (45m)",
             subtitle = "Intensive problem solving & review",
-            xpReward = 50,
+            xpReward = 75,
             isCompleted = false,
             isStarter = true
         ),
@@ -139,6 +144,9 @@ object FocusRepository {
     private val _isBlockingActive = MutableStateFlow(false)
     val isBlockingActive: StateFlow<Boolean> = _isBlockingActive.asStateFlow()
 
+    private val _forceDungeonLockTestMode = MutableStateFlow(false)
+    val forceDungeonLockTestMode: StateFlow<Boolean> = _forceDungeonLockTestMode.asStateFlow()
+
     private val _sealYoutubeShorts = MutableStateFlow(true)
     val sealYoutubeShorts: StateFlow<Boolean> = _sealYoutubeShorts.asStateFlow()
 
@@ -151,18 +159,28 @@ object FocusRepository {
     private val _dailyQuests = MutableStateFlow(defaultStarterQuests)
     val dailyQuests: StateFlow<List<DailyQuest>> = _dailyQuests.asStateFlow()
 
+    private val _geminiApiKey = MutableStateFlow("")
+    val geminiApiKey: StateFlow<String> = _geminiApiKey.asStateFlow()
+
     private val _activeBanner = MutableStateFlow<SystemAlertBanner?>(null)
     val activeBanner: StateFlow<SystemAlertBanner?> = _activeBanner.asStateFlow()
 
     private val _lastBlockedEventDescription = MutableStateFlow<String?>(null)
     val lastBlockedEventDescription: StateFlow<String?> = _lastBlockedEventDescription.asStateFlow()
 
-    fun initialize(context: Context) {
-        if (prefs != null) return
-        val sharedPrefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs = sharedPrefs
+    /**
+     * Safe to call from both MainActivity and FocusBlockerService.onServiceConnected() /
+     * onAccessibilityEvent() so the AccessibilityService always reads live state even when
+     * the main UI is closed or backgrounded.
+     */
+    fun init(context: Context) {
+        val sharedPrefs = prefs ?: context.applicationContext
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .also { prefs = it }
         loadFromPrefs(sharedPrefs)
     }
+
+    fun initialize(context: Context) = init(context)
 
     private fun loadFromPrefs(sharedPrefs: SharedPreferences) {
         val level = sharedPrefs.getInt(KEY_LEVEL, 1).coerceAtLeast(1)
@@ -184,9 +202,16 @@ object FocusRepository {
         val rewardMins = sharedPrefs.getInt(KEY_REWARD_MINUTES, 10)
         _focusDurationMinutes.value = focusMins
         _rewardDurationMinutes.value = rewardMins
-        if (_timerPhase.value == TimerPhase.IDLE) {
+        if (_timerPhase.value == TimerPhase.IDLE && !_isTimerRunning.value) {
             _remainingSeconds.value = focusMins * 60
             _totalPhaseSeconds.value = focusMins * 60
+        }
+
+        val forceLock = sharedPrefs.getBoolean(KEY_FORCE_DUNGEON_LOCK, false)
+        val blockingActive = sharedPrefs.getBoolean(KEY_IS_BLOCKING_ACTIVE, false) || forceLock
+        _forceDungeonLockTestMode.value = forceLock
+        if (_timerPhase.value != TimerPhase.REWARD_UNLOCK || forceLock) {
+            _isBlockingActive.value = blockingActive
         }
 
         _sealYoutubeShorts.value = sharedPrefs.getBoolean(KEY_SEAL_SHORTS, true)
@@ -196,6 +221,9 @@ object FocusRepository {
         if (savedPackages != null) {
             _blockedPackages.value = savedPackages.toSet()
         }
+
+        val savedApiKey = sharedPrefs.getString(KEY_GEMINI_API_KEY, "").orEmpty()
+        _geminiApiKey.value = savedApiKey
 
         val questsJson = sharedPrefs.getString(KEY_QUESTS_JSON, null)
         if (!questsJson.isNullOrBlank()) {
@@ -208,6 +236,20 @@ object FocusRepository {
 
     fun xpRequiredForLevel(level: Int): Int {
         return 150 + (level * 50)
+    }
+
+    fun saveGeminiApiKey(apiKey: String) {
+        val cleaned = apiKey.trim()
+        _geminiApiKey.value = cleaned
+        prefs?.edit()?.putString(KEY_GEMINI_API_KEY, cleaned)?.apply()
+        _activeBanner.value = SystemAlertBanner(
+            title = "[ ! SYSTEM NOTIFICATION ]",
+            message = if (cleaned.isNotEmpty()) {
+                "Gemini API Key stored in local System memory."
+            } else {
+                "Gemini API Key cleared. Offline Heuristic Arbiter active."
+            }
+        )
     }
 
     fun setFocusDuration(minutes: Int) {
@@ -231,6 +273,7 @@ object FocusRepository {
         _remainingSeconds.value = totalSecs
         _isTimerRunning.value = true
         _isBlockingActive.value = true
+        prefs?.edit()?.putBoolean(KEY_IS_BLOCKING_ACTIVE, true)?.apply()
         _activeBanner.value = SystemAlertBanner(
             title = "[ DUNGEON LOCK: ACTIVE ]",
             message = "Distraction Seals engaged for ${_focusDurationMinutes.value}m. Do not retreat."
@@ -245,7 +288,9 @@ object FocusRepository {
         val nextRunning = !_isTimerRunning.value
         _isTimerRunning.value = nextRunning
         if (_timerPhase.value == TimerPhase.FOCUS_LOCK) {
-            _isBlockingActive.value = nextRunning
+            val shouldBlock = nextRunning || _forceDungeonLockTestMode.value
+            _isBlockingActive.value = shouldBlock
+            prefs?.edit()?.putBoolean(KEY_IS_BLOCKING_ACTIVE, shouldBlock)?.apply()
         }
     }
 
@@ -255,19 +300,33 @@ object FocusRepository {
         val focusSecs = _focusDurationMinutes.value * 60
         _totalPhaseSeconds.value = focusSecs
         _remainingSeconds.value = focusSecs
-        // If daily quests are incomplete, keep seals active only if user toggled manual lock; default to false on idle
-        _isBlockingActive.value = false
+        val shouldBlock = _forceDungeonLockTestMode.value
+        _isBlockingActive.value = shouldBlock
+        prefs?.edit()?.putBoolean(KEY_IS_BLOCKING_ACTIVE, shouldBlock)?.apply()
     }
 
-    fun setManualDungeonLock(active: Boolean) {
-        _isBlockingActive.value = active
-        if (active && _timerPhase.value == TimerPhase.IDLE) {
+    fun setForceDungeonLockTestMode(active: Boolean) {
+        _forceDungeonLockTestMode.value = active
+        _isBlockingActive.value = active || (_timerPhase.value == TimerPhase.FOCUS_LOCK && _isTimerRunning.value)
+        prefs?.edit()
+            ?.putBoolean(KEY_FORCE_DUNGEON_LOCK, active)
+            ?.putBoolean(KEY_IS_BLOCKING_ACTIVE, _isBlockingActive.value)
+            ?.apply()
+
+        if (active) {
             _activeBanner.value = SystemAlertBanner(
-                title = "[ DUNGEON LOCK: ACTIVE ]",
-                message = "Penalty Seals manually armed by the Player."
+                title = "[ FORCE DUNGEON LOCK: ACTIVE ]",
+                message = "Test Mode engaged. Blocked apps, YouTube Shorts, and Instagram Reels are immediately sealed."
+            )
+        } else {
+            _activeBanner.value = SystemAlertBanner(
+                title = "[ ! SYSTEM NOTIFICATION ]",
+                message = "Force Dungeon Lock (Test Mode) disengaged."
             )
         }
     }
+
+    fun setManualDungeonLock(active: Boolean) = setForceDungeonLockTestMode(active)
 
     fun tickOneSecond() {
         if (!_isTimerRunning.value) return
@@ -282,13 +341,17 @@ object FocusRepository {
     fun onPhaseReachedZero() {
         when (_timerPhase.value) {
             TimerPhase.FOCUS_LOCK -> {
-                // Focus Timer hit 00:00 -> Award +100 XP, display [ QUEST CLEARED: REWARD TIME UNLOCKED ], start Reward countdown
                 val rewardSecs = _rewardDurationMinutes.value * 60
                 _timerPhase.value = TimerPhase.REWARD_UNLOCK
                 _totalPhaseSeconds.value = rewardSecs
                 _remainingSeconds.value = rewardSecs
                 _isTimerRunning.value = true
-                _isBlockingActive.value = false // Temporarily unseal blocked apps during Reward Time
+                _forceDungeonLockTestMode.value = false
+                _isBlockingActive.value = false
+                prefs?.edit()
+                    ?.putBoolean(KEY_FORCE_DUNGEON_LOCK, false)
+                    ?.putBoolean(KEY_IS_BLOCKING_ACTIVE, false)
+                    ?.apply()
 
                 val leveledUp = addXpInternal(100, incrementDungeonCount = true)
                 _activeBanner.value = SystemAlertBanner(
@@ -303,7 +366,6 @@ object FocusRepository {
                 )
             }
             TimerPhase.REWARD_UNLOCK -> {
-                // Reward Time finished -> return to IDLE and re-arm seals if quests are incomplete
                 _isTimerRunning.value = false
                 _timerPhase.value = TimerPhase.IDLE
                 val focusSecs = _focusDurationMinutes.value * 60
@@ -311,6 +373,7 @@ object FocusRepository {
                 _remainingSeconds.value = focusSecs
                 val hasIncompleteQuests = _dailyQuests.value.any { !it.isCompleted }
                 _isBlockingActive.value = hasIncompleteQuests
+                prefs?.edit()?.putBoolean(KEY_IS_BLOCKING_ACTIVE, hasIncompleteQuests)?.apply()
                 _activeBanner.value = SystemAlertBanner(
                     title = "[ ! SYSTEM NOTIFICATION ]",
                     message = if (hasIncompleteQuests) {
@@ -396,16 +459,43 @@ object FocusRepository {
         }
     }
 
-    fun addCustomQuest(title: String, subtitle: String = "Player-assigned Daily Preparation") {
+    fun addApprovedArbiterQuest(result: ArbiterVerdictResult) {
+        saveLastArbiterVerdictToPrefs(result)
+        if (result.verdict == "DECLINE") return
+
+        val finalTitle = result.finalQuestTitle.trim()
+        if (finalTitle.isEmpty()) return
+
+        val newQuest = DailyQuest(
+            id = "quest_${System.currentTimeMillis()}",
+            title = finalTitle,
+            subtitle = result.systemMessage,
+            xpReward = result.xpReward.coerceIn(50, 150),
+            isCompleted = false,
+            isStarter = false,
+            arbiterVerdict = result.verdict
+        )
+        val updated = listOf(newQuest) + _dailyQuests.value
+        _dailyQuests.value = updated
+        saveQuestsToPrefs(updated)
+    }
+
+    fun addCustomQuest(
+        title: String,
+        subtitle: String = "Player-assigned Daily Preparation",
+        xpReward: Int = 50,
+        arbiterVerdict: String? = null
+    ) {
         val trimmed = title.trim()
         if (trimmed.isEmpty()) return
         val newQuest = DailyQuest(
             id = "quest_${System.currentTimeMillis()}",
             title = trimmed,
             subtitle = subtitle.trim().ifEmpty { "Player-assigned Daily Preparation" },
-            xpReward = 50,
+            xpReward = xpReward.coerceIn(50, 150),
             isCompleted = false,
-            isStarter = false
+            isStarter = false,
+            arbiterVerdict = arbiterVerdict
         )
         val updated = _dailyQuests.value + newQuest
         _dailyQuests.value = updated
@@ -454,6 +544,18 @@ object FocusRepository {
         _activeBanner.value = null
     }
 
+    private fun saveLastArbiterVerdictToPrefs(result: ArbiterVerdictResult) {
+        val obj = JSONObject().apply {
+            put("verdict", result.verdict)
+            put("submittedQuestTitle", result.submittedQuestTitle)
+            put("finalQuestTitle", result.finalQuestTitle)
+            put("xpReward", result.xpReward)
+            put("systemMessage", result.systemMessage)
+            put("timestamp", System.currentTimeMillis())
+        }
+        prefs?.edit()?.putString(KEY_LAST_ARBITER_VERDICT_JSON, obj.toString())?.apply()
+    }
+
     private fun saveQuestsToPrefs(quests: List<DailyQuest>) {
         val array = JSONArray()
         quests.forEach { quest ->
@@ -464,6 +566,9 @@ object FocusRepository {
                 put("xpReward", quest.xpReward)
                 put("isCompleted", quest.isCompleted)
                 put("isStarter", quest.isStarter)
+                if (quest.arbiterVerdict != null) {
+                    put("arbiterVerdict", quest.arbiterVerdict)
+                }
             }
             array.put(obj)
         }
@@ -476,6 +581,7 @@ object FocusRepository {
             val result = mutableListOf<DailyQuest>()
             for (i in 0 until array.length()) {
                 val obj = array.getJSONObject(i)
+                val verdictStr = obj.optString("arbiterVerdict", "").takeIf { it.isNotBlank() }
                 result.add(
                     DailyQuest(
                         id = obj.optString("id", "quest_$i"),
@@ -483,7 +589,8 @@ object FocusRepository {
                         subtitle = obj.optString("subtitle", "Player Preparation"),
                         xpReward = obj.optInt("xpReward", 50),
                         isCompleted = obj.optBoolean("isCompleted", false),
-                        isStarter = obj.optBoolean("isStarter", false)
+                        isStarter = obj.optBoolean("isStarter", false),
+                        arbiterVerdict = verdictStr
                     )
                 )
             }
