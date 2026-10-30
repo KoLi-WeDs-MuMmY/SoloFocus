@@ -8,6 +8,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import org.json.JSONArray
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.math.roundToInt
 
 enum class HunterRank(val label: String, val title: String, val minLevel: Int) {
     E_RANK("E-RANK", "NOVICE AWAKENED", 1),
@@ -42,7 +46,7 @@ data class DailyQuest(
 
 data class PlayerStatsState(
     val level: Int = 1,
-    val currentXp: Int = 40,
+    val currentXp: Int = 0,
     val xpToNextLevel: Int = 200,
     val rank: HunterRank = HunterRank.E_RANK,
     val streakDays: Int = 1,
@@ -57,6 +61,11 @@ data class SystemAlertBanner(
     val isRewardUnlock: Boolean = false
 )
 
+data class TokenRedemptionTier(
+    val minutes: Int,
+    val tokenCost: Int
+)
+
 object FocusRepository {
     private const val PREFS_NAME = "system_focus_hud_prefs"
     private const val KEY_LEVEL = "player_level"
@@ -64,15 +73,32 @@ object FocusRepository {
     private const val KEY_STREAK = "player_streak"
     private const val KEY_COMPLETED_DUNGEONS = "player_completed_dungeons"
     private const val KEY_FOCUS_MINUTES = "focus_duration_minutes"
-    private const val KEY_REWARD_MINUTES = "reward_duration_minutes"
+    private const val KEY_REWARD_TOKENS = "player_reward_tokens"
+    private const val KEY_BOUND_QUEST_ID = "bound_quest_id"
     private const val KEY_IS_BLOCKING_ACTIVE = "is_blocking_active"
     private const val KEY_FORCE_DUNGEON_LOCK = "force_dungeon_lock_test_mode"
     private const val KEY_SEAL_SHORTS = "seal_youtube_shorts"
     private const val KEY_SEAL_REELS = "seal_instagram_reels"
     private const val KEY_BLOCKED_PACKAGES = "blocked_packages"
-    private const val KEY_QUESTS_JSON = "daily_quests_json"
+    private const val KEY_UNSEALED_APPS_JSON = "unsealed_apps_expiry_json"
+    private const val KEY_QUESTS_JSON = "daily_quests_json_v12"
+    private const val KEY_LAST_QUEST_DATE = "daily_quests_last_date"
     private const val KEY_GEMINI_API_KEY = "gemini_api_key_custom"
     private const val KEY_LAST_ARBITER_VERDICT_JSON = "last_arbiter_verdict_json"
+
+    // Minimum scientific focus threshold: 5 minutes
+    const val MIN_FOCUS_THRESHOLD_MINUTES = 5
+    // 10 Tokens = 1 minute of app usability; 35m focus = 100 Tokens = 10m app usability
+    const val TOKENS_PER_APP_MINUTE = 10
+
+    val TOKEN_REDEMPTION_TIERS: List<TokenRedemptionTier> = listOf(
+        TokenRedemptionTier(minutes = 10, tokenCost = 100),
+        TokenRedemptionTier(minutes = 20, tokenCost = 200),
+        TokenRedemptionTier(minutes = 30, tokenCost = 300),
+        TokenRedemptionTier(minutes = 40, tokenCost = 400),
+        TokenRedemptionTier(minutes = 50, tokenCost = 500),
+        TokenRedemptionTier(minutes = 60, tokenCost = 600)
+    )
 
     private var prefs: SharedPreferences? = null
 
@@ -85,57 +111,25 @@ object FocusRepository {
         "com.snapchat.android"
     )
 
-    private val defaultStarterQuests = listOf(
-        DailyQuest(
-            id = "quest_deep_work",
-            title = "Complete 1 Deep Work Dungeon Session",
-            subtitle = "Zero distraction interruptions [0/1]",
-            xpReward = 50,
-            isCompleted = false,
-            isStarter = true
-        ),
-        DailyQuest(
-            id = "quest_code_study",
-            title = "Algorithm & Core Skill Training (45m)",
-            subtitle = "Intensive problem solving & review",
-            xpReward = 75,
-            isCompleted = false,
-            isStarter = true
-        ),
-        DailyQuest(
-            id = "quest_reading",
-            title = "Read 20 Pages of Technical / Study Material",
-            subtitle = "Intelligence stat conditioning",
-            xpReward = 50,
-            isCompleted = false,
-            isStarter = true
-        ),
-        DailyQuest(
-            id = "quest_no_scroll",
-            title = "Abstain from Short-Form Video Feeds",
-            subtitle = "Keep YouTube Shorts & Reels sealed",
-            xpReward = 50,
-            isCompleted = false,
-            isStarter = true
-        )
-    )
-
     private val _playerStats = MutableStateFlow(PlayerStatsState())
     val playerStats: StateFlow<PlayerStatsState> = _playerStats.asStateFlow()
 
-    private val _focusDurationMinutes = MutableStateFlow(25)
+    private val _rewardTokens = MutableStateFlow(0)
+    val rewardTokens: StateFlow<Int> = _rewardTokens.asStateFlow()
+
+    private val _focusDurationMinutes = MutableStateFlow(35)
     val focusDurationMinutes: StateFlow<Int> = _focusDurationMinutes.asStateFlow()
 
-    private val _rewardDurationMinutes = MutableStateFlow(10)
-    val rewardDurationMinutes: StateFlow<Int> = _rewardDurationMinutes.asStateFlow()
+    private val _boundQuestId = MutableStateFlow<String?>(null)
+    val boundQuestId: StateFlow<String?> = _boundQuestId.asStateFlow()
 
     private val _timerPhase = MutableStateFlow(TimerPhase.IDLE)
     val timerPhase: StateFlow<TimerPhase> = _timerPhase.asStateFlow()
 
-    private val _remainingSeconds = MutableStateFlow(25 * 60)
+    private val _remainingSeconds = MutableStateFlow(35 * 60)
     val remainingSeconds: StateFlow<Int> = _remainingSeconds.asStateFlow()
 
-    private val _totalPhaseSeconds = MutableStateFlow(25 * 60)
+    private val _totalPhaseSeconds = MutableStateFlow(35 * 60)
     val totalPhaseSeconds: StateFlow<Int> = _totalPhaseSeconds.asStateFlow()
 
     private val _isTimerRunning = MutableStateFlow(false)
@@ -156,7 +150,12 @@ object FocusRepository {
     private val _blockedPackages = MutableStateFlow(defaultBlockedPackages)
     val blockedPackages: StateFlow<Set<String>> = _blockedPackages.asStateFlow()
 
-    private val _dailyQuests = MutableStateFlow(defaultStarterQuests)
+    // Per-app independent unseal expiration map: packageName -> expirationEpochMillis
+    private val _unsealedAppsExpiryMap = MutableStateFlow<Map<String, Long>>(emptyMap())
+    val unsealedAppsExpiryMap: StateFlow<Map<String, Long>> = _unsealedAppsExpiryMap.asStateFlow()
+
+    // Daily Quests start completely empty (0 quests) and reset at midnight
+    private val _dailyQuests = MutableStateFlow<List<DailyQuest>>(emptyList())
     val dailyQuests: StateFlow<List<DailyQuest>> = _dailyQuests.asStateFlow()
 
     private val _geminiApiKey = MutableStateFlow("")
@@ -169,22 +168,53 @@ object FocusRepository {
     val lastBlockedEventDescription: StateFlow<String?> = _lastBlockedEventDescription.asStateFlow()
 
     /**
-     * Safe to call from both MainActivity and FocusBlockerService.onServiceConnected() /
-     * onAccessibilityEvent() so the AccessibilityService always reads live state even when
-     * the main UI is closed or backgrounded.
+     * Scientifically tuned Reward Token formula:
+     * - Under 5 minutes of focus: 0 Tokens.
+     * - 5+ minutes of focus: 35m Focus = 100 Tokens (10m of app usability at 10 Tokens/min).
+     *   Rounded to the nearest 5 Tokens for clean RPG HUD numbers.
      */
+    fun calculateTokensForFocusMinutes(minutes: Int): Int {
+        if (minutes < MIN_FOCUS_THRESHOLD_MINUTES) return 0
+        val rawTokens = (minutes * 100.0) / 35.0
+        return ((rawTokens / 5.0).roundToInt() * 5).coerceAtLeast(10)
+    }
+
     fun init(context: Context) {
         val sharedPrefs = prefs ?: context.applicationContext
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .also { prefs = it }
         loadFromPrefs(sharedPrefs)
+        checkAndEnforceMidnightQuestReset(sharedPrefs)
+        pruneExpiredUnseals()
     }
 
     fun initialize(context: Context) = init(context)
 
+    private fun currentLocalDayKey(): String {
+        return SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+    }
+
+    fun checkAndEnforceMidnightQuestReset(sharedPrefs: SharedPreferences? = prefs) {
+        val sp = sharedPrefs ?: return
+        val todayKey = currentLocalDayKey()
+        val savedDayKey = sp.getString(KEY_LAST_QUEST_DATE, null)
+        if (savedDayKey == null) {
+            sp.edit().putString(KEY_LAST_QUEST_DATE, todayKey).apply()
+        } else if (savedDayKey != todayKey) {
+            // Midnight passed: clear Daily Quests log to 0 quests for the new day
+            _dailyQuests.value = emptyList()
+            _boundQuestId.value = null
+            sp.edit()
+                .putString(KEY_LAST_QUEST_DATE, todayKey)
+                .putString(KEY_QUESTS_JSON, "[]")
+                .remove(KEY_BOUND_QUEST_ID)
+                .apply()
+        }
+    }
+
     private fun loadFromPrefs(sharedPrefs: SharedPreferences) {
         val level = sharedPrefs.getInt(KEY_LEVEL, 1).coerceAtLeast(1)
-        val xp = sharedPrefs.getInt(KEY_CURRENT_XP, 40).coerceAtLeast(0)
+        val xp = sharedPrefs.getInt(KEY_CURRENT_XP, 0).coerceAtLeast(0)
         val streak = sharedPrefs.getInt(KEY_STREAK, 1).coerceAtLeast(1)
         val dungeons = sharedPrefs.getInt(KEY_COMPLETED_DUNGEONS, 0).coerceAtLeast(0)
         val xpNeeded = xpRequiredForLevel(level)
@@ -198,21 +228,21 @@ object FocusRepository {
             completedDungeons = dungeons
         )
 
-        val focusMins = sharedPrefs.getInt(KEY_FOCUS_MINUTES, 25)
-        val rewardMins = sharedPrefs.getInt(KEY_REWARD_MINUTES, 10)
+        _rewardTokens.value = sharedPrefs.getInt(KEY_REWARD_TOKENS, 0).coerceAtLeast(0)
+
+        val focusMins = sharedPrefs.getInt(KEY_FOCUS_MINUTES, 35)
         _focusDurationMinutes.value = focusMins
-        _rewardDurationMinutes.value = rewardMins
         if (_timerPhase.value == TimerPhase.IDLE && !_isTimerRunning.value) {
             _remainingSeconds.value = focusMins * 60
             _totalPhaseSeconds.value = focusMins * 60
         }
 
+        _boundQuestId.value = sharedPrefs.getString(KEY_BOUND_QUEST_ID, null)?.takeIf { it.isNotBlank() }
+
         val forceLock = sharedPrefs.getBoolean(KEY_FORCE_DUNGEON_LOCK, false)
         val blockingActive = sharedPrefs.getBoolean(KEY_IS_BLOCKING_ACTIVE, false) || forceLock
         _forceDungeonLockTestMode.value = forceLock
-        if (_timerPhase.value != TimerPhase.REWARD_UNLOCK || forceLock) {
-            _isBlockingActive.value = blockingActive
-        }
+        _isBlockingActive.value = blockingActive
 
         _sealYoutubeShorts.value = sharedPrefs.getBoolean(KEY_SEAL_SHORTS, true)
         _sealInstagramReels.value = sharedPrefs.getBoolean(KEY_SEAL_REELS, true)
@@ -222,15 +252,21 @@ object FocusRepository {
             _blockedPackages.value = savedPackages.toSet()
         }
 
+        val unsealedJson = sharedPrefs.getString(KEY_UNSEALED_APPS_JSON, null)
+        if (!unsealedJson.isNullOrBlank()) {
+            _unsealedAppsExpiryMap.value = parseUnsealedAppsJson(unsealedJson)
+        } else {
+            _unsealedAppsExpiryMap.value = emptyMap()
+        }
+
         val savedApiKey = sharedPrefs.getString(KEY_GEMINI_API_KEY, "").orEmpty()
         _geminiApiKey.value = savedApiKey
 
         val questsJson = sharedPrefs.getString(KEY_QUESTS_JSON, null)
         if (!questsJson.isNullOrBlank()) {
-            val parsed = parseQuestsJson(questsJson)
-            if (parsed.isNotEmpty()) {
-                _dailyQuests.value = parsed
-            }
+            _dailyQuests.value = parseQuestsJson(questsJson)
+        } else {
+            _dailyQuests.value = emptyList()
         }
     }
 
@@ -261,9 +297,12 @@ object FocusRepository {
         }
     }
 
-    fun setRewardDuration(minutes: Int) {
-        _rewardDurationMinutes.value = minutes
-        prefs?.edit()?.putInt(KEY_REWARD_MINUTES, minutes)?.apply()
+    fun bindQuestToTimer(questId: String?) {
+        _boundQuestId.value = questId
+        prefs?.edit()?.apply {
+            if (questId == null) remove(KEY_BOUND_QUEST_ID)
+            else putString(KEY_BOUND_QUEST_ID, questId)
+        }?.apply()
     }
 
     fun startFocusDungeon() {
@@ -274,9 +313,16 @@ object FocusRepository {
         _isTimerRunning.value = true
         _isBlockingActive.value = true
         prefs?.edit()?.putBoolean(KEY_IS_BLOCKING_ACTIVE, true)?.apply()
+
+        val boundQuest = _dailyQuests.value.find { it.id == _boundQuestId.value && !it.isCompleted }
+        val expectedTokens = calculateTokensForFocusMinutes(_focusDurationMinutes.value)
         _activeBanner.value = SystemAlertBanner(
             title = "[ DUNGEON LOCK: ACTIVE ]",
-            message = "Distraction Seals engaged for ${_focusDurationMinutes.value}m. Do not retreat."
+            message = if (boundQuest != null) {
+                "Bound Quest: \"${boundQuest.title}\" • Clear for +$expectedTokens Tokens & +${100 + boundQuest.xpReward} XP."
+            } else {
+                "Distraction Seals armed for ${_focusDurationMinutes.value}m. Clear for +$expectedTokens Reward Tokens."
+            }
         )
     }
 
@@ -294,7 +340,21 @@ object FocusRepository {
         }
     }
 
+    /**
+     * If the Player focused for at least the 5-minute threshold before ending early,
+     * awards proportional Reward Tokens for the elapsed focused minutes.
+     */
     fun abortTimerToIdle() {
+        val elapsedSeconds = (_totalPhaseSeconds.value - _remainingSeconds.value).coerceAtLeast(0)
+        val elapsedMinutes = elapsedSeconds / 60
+        val earnedPartialTokens = if (_timerPhase.value == TimerPhase.FOCUS_LOCK &&
+            elapsedMinutes >= MIN_FOCUS_THRESHOLD_MINUTES
+        ) {
+            calculateTokensForFocusMinutes(elapsedMinutes)
+        } else {
+            0
+        }
+
         _isTimerRunning.value = false
         _timerPhase.value = TimerPhase.IDLE
         val focusSecs = _focusDurationMinutes.value * 60
@@ -303,6 +363,14 @@ object FocusRepository {
         val shouldBlock = _forceDungeonLockTestMode.value
         _isBlockingActive.value = shouldBlock
         prefs?.edit()?.putBoolean(KEY_IS_BLOCKING_ACTIVE, shouldBlock)?.apply()
+
+        if (earnedPartialTokens > 0) {
+            depositRewardTokens(earnedPartialTokens)
+            _activeBanner.value = SystemAlertBanner(
+                title = "[ THRESHOLD PASSED: +$earnedPartialTokens TOKENS ]",
+                message = "Focused for ${elapsedMinutes}m (>= ${MIN_FOCUS_THRESHOLD_MINUTES}m threshold). +$earnedPartialTokens Reward Tokens deposited."
+            )
+        }
     }
 
     fun setForceDungeonLockTestMode(active: Boolean) {
@@ -316,7 +384,7 @@ object FocusRepository {
         if (active) {
             _activeBanner.value = SystemAlertBanner(
                 title = "[ FORCE DUNGEON LOCK: ACTIVE ]",
-                message = "Test Mode engaged. Blocked apps, YouTube Shorts, and Instagram Reels are immediately sealed."
+                message = "Test Mode engaged. Sealed apps (unless Token-unsealed) and Shorts/Reels will trigger the Crimson Overlay."
             )
         } else {
             _activeBanner.value = SystemAlertBanner(
@@ -326,9 +394,8 @@ object FocusRepository {
         }
     }
 
-    fun setManualDungeonLock(active: Boolean) = setForceDungeonLockTestMode(active)
-
     fun tickOneSecond() {
+        pruneExpiredUnseals()
         if (!_isTimerRunning.value) return
         val current = _remainingSeconds.value
         if (current > 1) {
@@ -339,51 +406,113 @@ object FocusRepository {
     }
 
     fun onPhaseReachedZero() {
-        when (_timerPhase.value) {
-            TimerPhase.FOCUS_LOCK -> {
-                val rewardSecs = _rewardDurationMinutes.value * 60
-                _timerPhase.value = TimerPhase.REWARD_UNLOCK
-                _totalPhaseSeconds.value = rewardSecs
-                _remainingSeconds.value = rewardSecs
-                _isTimerRunning.value = true
-                _forceDungeonLockTestMode.value = false
-                _isBlockingActive.value = false
-                prefs?.edit()
-                    ?.putBoolean(KEY_FORCE_DUNGEON_LOCK, false)
-                    ?.putBoolean(KEY_IS_BLOCKING_ACTIVE, false)
-                    ?.apply()
+        if (_timerPhase.value != TimerPhase.FOCUS_LOCK) return
 
-                val leveledUp = addXpInternal(100, incrementDungeonCount = true)
-                _activeBanner.value = SystemAlertBanner(
-                    title = "[ QUEST CLEARED: REWARD TIME UNLOCKED ]",
-                    message = if (leveledUp) {
-                        "+100 XP GRANTED • [ LEVEL UP! ] • Distraction Seals temporarily lifted for ${_rewardDurationMinutes.value}m!"
-                    } else {
-                        "+100 XP GRANTED • Distraction Seals temporarily lifted for ${_rewardDurationMinutes.value}m!"
-                    },
-                    isLevelUp = leveledUp,
-                    isRewardUnlock = true
-                )
+        val focusMins = _focusDurationMinutes.value
+        val earnedTokens = calculateTokensForFocusMinutes(focusMins)
+        depositRewardTokens(earnedTokens)
+
+        // Check if a Daily Quest was bound to this Focus Timer
+        val boundId = _boundQuestId.value
+        val boundQuest = _dailyQuests.value.find { it.id == boundId && !it.isCompleted }
+        var totalXpGranted = 100
+        var boundQuestCompletedTitle: String? = null
+
+        if (boundQuest != null) {
+            val updatedQuests = _dailyQuests.value.map { q ->
+                if (q.id == boundQuest.id) q.copy(isCompleted = true) else q
             }
-            TimerPhase.REWARD_UNLOCK -> {
-                _isTimerRunning.value = false
-                _timerPhase.value = TimerPhase.IDLE
-                val focusSecs = _focusDurationMinutes.value * 60
-                _totalPhaseSeconds.value = focusSecs
-                _remainingSeconds.value = focusSecs
-                val hasIncompleteQuests = _dailyQuests.value.any { !it.isCompleted }
-                _isBlockingActive.value = hasIncompleteQuests
-                prefs?.edit()?.putBoolean(KEY_IS_BLOCKING_ACTIVE, hasIncompleteQuests)?.apply()
-                _activeBanner.value = SystemAlertBanner(
-                    title = "[ ! SYSTEM NOTIFICATION ]",
-                    message = if (hasIncompleteQuests) {
-                        "Reward window expired. Incomplete Daily Quests detected — Distraction Seals re-locked."
-                    } else {
-                        "Reward window complete. System awaiting next Dungeon command."
-                    }
-                )
-            }
-            TimerPhase.IDLE -> Unit
+            _dailyQuests.value = updatedQuests
+            saveQuestsToPrefs(updatedQuests)
+            totalXpGranted += boundQuest.xpReward
+            boundQuestCompletedTitle = boundQuest.title
+            bindQuestToTimer(null)
+        }
+
+        // Return timer to IDLE and keep seals armed if any daily quests remain incomplete or force lock is on
+        _isTimerRunning.value = false
+        _timerPhase.value = TimerPhase.IDLE
+        val focusSecs = focusMins * 60
+        _totalPhaseSeconds.value = focusSecs
+        _remainingSeconds.value = focusSecs
+        val hasIncompleteQuests = _dailyQuests.value.any { !it.isCompleted }
+        val keepLocked = _forceDungeonLockTestMode.value || hasIncompleteQuests
+        _isBlockingActive.value = keepLocked
+        prefs?.edit()?.putBoolean(KEY_IS_BLOCKING_ACTIVE, keepLocked)?.apply()
+
+        val leveledUp = addXpInternal(totalXpGranted, incrementDungeonCount = true)
+
+        _activeBanner.value = SystemAlertBanner(
+            title = "[ DUNGEON CLEARED: +$earnedTokens TOKENS ]",
+            message = buildString {
+                append("+$totalXpGranted XP & +$earnedTokens Reward Tokens deposited! ")
+                if (boundQuestCompletedTitle != null) {
+                    append("Bound Quest \"$boundQuestCompletedTitle\" auto-completed! ")
+                }
+                if (leveledUp) {
+                    append("[ LEVEL UP! ] ")
+                }
+                append("Redeem Tokens in [ PENALTY SEALS ] to unseal individual apps.")
+            },
+            isLevelUp = leveledUp,
+            isRewardUnlock = true
+        )
+    }
+
+    private fun depositRewardTokens(tokensToAdd: Int) {
+        if (tokensToAdd <= 0) return
+        val updated = (_rewardTokens.value + tokensToAdd).coerceAtLeast(0)
+        _rewardTokens.value = updated
+        prefs?.edit()?.putInt(KEY_REWARD_TOKENS, updated)?.apply()
+    }
+
+    /**
+     * Redeems fixed-price Reward Tokens (10m..60m in 10m multiples; 10 Tokens = 1m)
+     * to temporarily unseal ONLY the specified package. Stackable with no cap.
+     */
+    fun redeemTokensForApp(packageName: String, appName: String, minutes: Int): Boolean {
+        val cost = minutes * TOKENS_PER_APP_MINUTE
+        if (minutes <= 0 || _rewardTokens.value < cost) {
+            _activeBanner.value = SystemAlertBanner(
+                title = "[ ! INSUFFICIENT REWARD TOKENS ]",
+                message = "Requires $cost Tokens for ${minutes}m unseal on $appName (Available: ${_rewardTokens.value} Tokens)."
+            )
+            return false
+        }
+
+        val now = System.currentTimeMillis()
+        val newBalance = (_rewardTokens.value - cost).coerceAtLeast(0)
+        _rewardTokens.value = newBalance
+        prefs?.edit()?.putInt(KEY_REWARD_TOKENS, newBalance)?.apply()
+
+        val currentMap = _unsealedAppsExpiryMap.value.toMutableMap()
+        val existingExpiry = currentMap[packageName]?.takeIf { it > now } ?: now
+        val newExpiry = existingExpiry + (minutes * 60_000L)
+        currentMap[packageName] = newExpiry
+        _unsealedAppsExpiryMap.value = currentMap
+        saveUnsealedAppsToPrefs(currentMap)
+
+        val totalRemainingMins = ((newExpiry - now) / 60_000L).coerceAtLeast(1L)
+        _activeBanner.value = SystemAlertBanner(
+            title = "[ SEAL LIFTED: ${appName.uppercase()} ]",
+            message = "Spent $cost Tokens (+${minutes}m). $appName is unsealed for ${totalRemainingMins}m while all other sealed apps remain locked!",
+            isRewardUnlock = true
+        )
+        return true
+    }
+
+    fun isPackageTemporarilyUnsealed(packageName: String, nowMs: Long = System.currentTimeMillis()): Boolean {
+        val expiry = _unsealedAppsExpiryMap.value[packageName] ?: return false
+        return expiry > nowMs
+    }
+
+    fun pruneExpiredUnseals(nowMs: Long = System.currentTimeMillis()) {
+        val current = _unsealedAppsExpiryMap.value
+        if (current.isEmpty()) return
+        val activeOnly = current.filterValues { it > nowMs }
+        if (activeOnly.size != current.size) {
+            _unsealedAppsExpiryMap.value = activeOnly
+            saveUnsealedAppsToPrefs(activeOnly)
         }
     }
 
@@ -403,6 +532,50 @@ object FocusRepository {
                 isLevelUp = false
             )
         }
+    }
+
+    /**
+     * Fixes the Quest Checkbox Exploit: Unchecking a completed quest deducts the exact XP
+     * it originally awarded and de-levels the Player if XP drops below 0.
+     */
+    fun deductXp(amount: Int, reason: String) {
+        if (amount <= 0) return
+        var stats = _playerStats.value
+        var newXp = stats.currentXp - amount
+        var newLevel = stats.level
+        var deLeveled = false
+
+        while (newXp < 0 && newLevel > 1) {
+            newLevel -= 1
+            val prevLevelCap = xpRequiredForLevel(newLevel)
+            newXp += prevLevelCap
+            deLeveled = true
+        }
+        if (newLevel <= 1 && newXp < 0) {
+            newLevel = 1
+            newXp = 0
+        }
+
+        val xpNeeded = xpRequiredForLevel(newLevel)
+        val newRank = HunterRank.forLevel(newLevel)
+
+        stats = stats.copy(
+            level = newLevel,
+            currentXp = newXp,
+            xpToNextLevel = xpNeeded,
+            rank = newRank
+        )
+        _playerStats.value = stats
+
+        prefs?.edit()
+            ?.putInt(KEY_LEVEL, newLevel)
+            ?.putInt(KEY_CURRENT_XP, newXp)
+            ?.apply()
+
+        _activeBanner.value = SystemAlertBanner(
+            title = if (deLeveled) "[ ! PENALTY: LEVEL DEMOTION ]" else "[ ! XP REVERSED ]",
+            message = "-$amount XP DEDUCTED — $reason (Current: LV.$newLevel • $newXp/$xpNeeded XP)"
+        )
     }
 
     private fun addXpInternal(amount: Int, incrementDungeonCount: Boolean): Boolean {
@@ -444,6 +617,7 @@ object FocusRepository {
     }
 
     fun toggleQuestCompletion(questId: String) {
+        checkAndEnforceMidnightQuestReset()
         val currentList = _dailyQuests.value
         val target = currentList.find { it.id == questId } ?: return
         val becomingCompleted = !target.isCompleted
@@ -455,11 +629,18 @@ object FocusRepository {
         saveQuestsToPrefs(updatedList)
 
         if (becomingCompleted) {
+            if (_boundQuestId.value == questId) {
+                bindQuestToTimer(null)
+            }
             addXp(target.xpReward, "Quest Completed: ${target.title}")
+        } else {
+            // Subtract exact XP when unchecked to prevent XP farming exploit
+            deductXp(target.xpReward, "Quest Unchecked: ${target.title}")
         }
     }
 
     fun addApprovedArbiterQuest(result: ArbiterVerdictResult) {
+        checkAndEnforceMidnightQuestReset()
         saveLastArbiterVerdictToPrefs(result)
         if (result.verdict == "DECLINE") return
 
@@ -480,38 +661,25 @@ object FocusRepository {
         saveQuestsToPrefs(updated)
     }
 
-    fun addCustomQuest(
-        title: String,
-        subtitle: String = "Player-assigned Daily Preparation",
-        xpReward: Int = 50,
-        arbiterVerdict: String? = null
-    ) {
-        val trimmed = title.trim()
-        if (trimmed.isEmpty()) return
-        val newQuest = DailyQuest(
-            id = "quest_${System.currentTimeMillis()}",
-            title = trimmed,
-            subtitle = subtitle.trim().ifEmpty { "Player-assigned Daily Preparation" },
-            xpReward = xpReward.coerceIn(50, 150),
-            isCompleted = false,
-            isStarter = false,
-            arbiterVerdict = arbiterVerdict
-        )
-        val updated = _dailyQuests.value + newQuest
-        _dailyQuests.value = updated
-        saveQuestsToPrefs(updated)
-    }
-
     fun deleteQuest(questId: String) {
+        if (_boundQuestId.value == questId) {
+            bindQuestToTimer(null)
+        }
         val updated = _dailyQuests.value.filterNot { it.id == questId }
         _dailyQuests.value = updated
         saveQuestsToPrefs(updated)
     }
 
     fun resetDailyQuests() {
-        val resetList = _dailyQuests.value.map { it.copy(isCompleted = false) }
+        val currentList = _dailyQuests.value
+        // Deduct XP for any completed quests being reset to incomplete so reset cannot be exploited
+        val xpToDeduct = currentList.filter { it.isCompleted }.sumOf { it.xpReward }
+        val resetList = currentList.map { it.copy(isCompleted = false) }
         _dailyQuests.value = resetList
         saveQuestsToPrefs(resetList)
+        if (xpToDeduct > 0) {
+            deductXp(xpToDeduct, "Daily Quests Reset to Incomplete")
+        }
     }
 
     fun setSealYoutubeShorts(enabled: Boolean) {
@@ -544,6 +712,36 @@ object FocusRepository {
         _activeBanner.value = null
     }
 
+    private fun saveUnsealedAppsToPrefs(map: Map<String, Long>) {
+        val obj = JSONObject()
+        val now = System.currentTimeMillis()
+        map.forEach { (pkg, expiry) ->
+            if (expiry > now) {
+                obj.put(pkg, expiry)
+            }
+        }
+        prefs?.edit()?.putString(KEY_UNSEALED_APPS_JSON, obj.toString())?.apply()
+    }
+
+    private fun parseUnsealedAppsJson(json: String): Map<String, Long> {
+        return try {
+            val obj = JSONObject(json)
+            val now = System.currentTimeMillis()
+            val result = mutableMapOf<String, Long>()
+            val keys = obj.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val expiry = obj.optLong(key, 0L)
+                if (expiry > now) {
+                    result[key] = expiry
+                }
+            }
+            result
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
     private fun saveLastArbiterVerdictToPrefs(result: ArbiterVerdictResult) {
         val obj = JSONObject().apply {
             put("verdict", result.verdict)
@@ -572,7 +770,10 @@ object FocusRepository {
             }
             array.put(obj)
         }
-        prefs?.edit()?.putString(KEY_QUESTS_JSON, array.toString())?.apply()
+        prefs?.edit()
+            ?.putString(KEY_QUESTS_JSON, array.toString())
+            ?.putString(KEY_LAST_QUEST_DATE, currentLocalDayKey())
+            ?.apply()
     }
 
     private fun parseQuestsJson(json: String): List<DailyQuest> {
@@ -596,7 +797,7 @@ object FocusRepository {
             }
             result
         } catch (_: Exception) {
-            defaultStarterQuests
+            emptyList()
         }
     }
 }

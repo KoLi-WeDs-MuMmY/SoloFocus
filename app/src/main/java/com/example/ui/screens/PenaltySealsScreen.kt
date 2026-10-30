@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.content.Intent
+import android.net.Uri
 import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -22,10 +23,12 @@ import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.GppBad
 import androidx.compose.material.icons.filled.GppGood
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Token
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -37,6 +40,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -51,7 +58,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.R
+import com.example.data.FocusRepository
 import com.example.ui.InstalledAppItem
+import com.example.ui.components.SystemDurationChip
 import com.example.ui.components.SystemHudButton
 import com.example.ui.components.SystemWindowCard
 import com.example.ui.theme.AbyssalBackground
@@ -68,6 +77,10 @@ import com.example.ui.theme.SystemWindowSurfaceElevated
 @Composable
 fun PenaltySealsScreen(
     isAccessibilityEnabled: Boolean,
+    canDrawOverlays: Boolean,
+    rewardTokens: Int,
+    unsealedAppsExpiryMap: Map<String, Long>,
+    currentTimeMillis: Long,
     isBlockingActive: Boolean,
     forceDungeonLockTestMode: Boolean,
     sealYoutubeShorts: Boolean,
@@ -77,6 +90,7 @@ fun PenaltySealsScreen(
     searchQuery: String,
     lastBlockedEventDescription: String?,
     onRefreshAccessibilityStatus: () -> Unit,
+    onRedeemTokensForApp: (String, String, Int) -> Boolean,
     onToggleForceDungeonLockTestMode: (Boolean) -> Unit,
     onToggleSealYoutubeShorts: (Boolean) -> Unit,
     onToggleSealInstagramReels: (Boolean) -> Unit,
@@ -100,6 +114,12 @@ fun PenaltySealsScreen(
         }
     }
 
+    val sealedAppItems = installedApps.filter { blockedPackages.contains(it.packageName) }
+    var selectedExchangePkg by rememberSaveable(sealedAppItems.map { it.packageName }) {
+        mutableStateOf(sealedAppItems.firstOrNull()?.packageName.orEmpty())
+    }
+    var selectedRedemptionMinutes by rememberSaveable { mutableStateOf(10) }
+
     val filteredApps = if (searchQuery.isBlank()) {
         installedApps
     } else {
@@ -115,14 +135,14 @@ fun PenaltySealsScreen(
             .testTag("penalty_seals_list"),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 1. Glowing [ SYSTEM AUTHORITY: ACCESSIBILITY SERVICE ] Status Card
+        // 1. Glowing [ SYSTEM AUTHORITY: ACCESSIBILITY & OVERLAY ] Status Card
         item {
             SystemWindowCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("system_authority_card"),
-                borderStartColor = if (isAccessibilityEnabled) SystemManaCyan else PenaltyDangerRed,
-                borderEndColor = if (isAccessibilityEnabled) RoyalSystemBlue else MonarchShadowPurple,
+                borderStartColor = if (isAccessibilityEnabled && canDrawOverlays) SystemManaCyan else PenaltyDangerRed,
+                borderEndColor = if (isAccessibilityEnabled && canDrawOverlays) RoyalSystemBlue else MonarchShadowPurple,
                 contentPadding = 16.dp
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -136,20 +156,20 @@ fun PenaltySealsScreen(
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(
-                                imageVector = if (isAccessibilityEnabled) {
+                                imageVector = if (isAccessibilityEnabled && canDrawOverlays) {
                                     Icons.Default.GppGood
                                 } else {
                                     Icons.Default.GppBad
                                 },
                                 contentDescription = "Accessibility Authority Status",
-                                tint = if (isAccessibilityEnabled) SystemManaCyan else PenaltyDangerRed,
+                                tint = if (isAccessibilityEnabled && canDrawOverlays) SystemManaCyan else PenaltyDangerRed,
                                 modifier = Modifier.size(24.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = stringResource(id = R.string.system_authority_header),
                                 style = MaterialTheme.typography.titleMedium,
-                                color = if (isAccessibilityEnabled) SystemManaCyan else PenaltyDangerRed,
+                                color = if (isAccessibilityEnabled && canDrawOverlays) SystemManaCyan else PenaltyDangerRed,
                                 fontWeight = FontWeight.Black
                             )
                         }
@@ -158,11 +178,21 @@ fun PenaltySealsScreen(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
-                        text = if (isAccessibilityEnabled) {
-                            "STATUS: ONLINE • FocusBlockerService has active System Authority to enforce app & Shorts/Reels seals even when the app UI is closed."
-                        } else {
-                            "STATUS: OFFLINE • Enable 'System Authority: Focus & Shorts Blocker' in Android Accessibility Settings to enforce real app and Shorts/Reels blocking."
+                        text = buildString {
+                            append("ACCESSIBILITY BLOCKER: ")
+                            append(if (isAccessibilityEnabled) "ONLINE" else "OFFLINE")
+                            append(" • CRIMSON WINDOW OVERLAY: ")
+                            append(if (canDrawOverlays) "ONLINE" else "OFFLINE")
                         },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isAccessibilityEnabled && canDrawOverlays) SystemManaCyan else PenaltyDangerRed,
+                        fontWeight = FontWeight.Black
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Text(
+                        text = "Grants FocusBlockerService authority to intercept sealed apps & Shorts/Reels and draw the 3-second Crimson '[ ! SYSTEM PENALTY: ACCESS DENIED ]' overlay.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = HudTextPrimary
                     )
@@ -181,9 +211,9 @@ fun PenaltySealsScreen(
 
                     SystemHudButton(
                         text = if (isAccessibilityEnabled) {
-                            "[ CONFIGURE ACCESSIBILITY AUTHORITY ]"
+                            "[ ACCESSIBILITY AUTHORITY: ONLINE (SETTINGS) ]"
                         } else {
-                            "[ GRANT SYSTEM AUTHORITY (OPEN SETTINGS) ]"
+                            "[ GRANT ACCESSIBILITY AUTHORITY ]"
                         },
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -198,11 +228,254 @@ fun PenaltySealsScreen(
                             .fillMaxWidth()
                             .testTag("accessibility_settings_button")
                     )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    SystemHudButton(
+                        text = if (canDrawOverlays) {
+                            "[ OVERLAY SYSTEM AUTHORITY: ONLINE ]"
+                        } else {
+                            "[ GRANT OVERLAY SYSTEM AUTHORITY ]"
+                        },
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            val intent = Intent(
+                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:${context.packageName}")
+                            ).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(intent)
+                        },
+                        primaryColor = if (canDrawOverlays) SystemManaCyan else SovereignRewardGold,
+                        secondaryColor = MonarchShadowPurple,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("overlay_settings_button")
+                    )
                 }
             }
         }
 
-        // 2. Short-Form Video & [ FORCE DUNGEON LOCK (TEST MODE) ] Seals Card
+        // 2. [ TOKEN EXCHANGE: PER-APP TEMPORARY UNSEAL ] System Window
+        item {
+            SystemWindowCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("token_exchange_card"),
+                borderStartColor = SovereignRewardGold,
+                borderEndColor = SystemManaCyan,
+                contentPadding = 16.dp
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Token,
+                                contentDescription = "Token Exchange",
+                                tint = SovereignRewardGold,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "[ TOKEN EXCHANGE: APP UNSEAL ]",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = SovereignRewardGold,
+                                fontWeight = FontWeight.Black
+                            )
+                        }
+
+                        Text(
+                            text = "VAULT: $rewardTokens TOKENS",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = SovereignRewardGold,
+                            fontWeight = FontWeight.Black
+                        )
+                    }
+
+                    Text(
+                        text = "Fixed Exchange Rate: 10 Tokens = 1 Minute (100T = 10m up to 600T = 60m). Unseals ONLY the selected app while all other sealed apps remain locked. Repeat transactions stack with no cap.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = HudTextSecondary
+                    )
+
+                    if (sealedAppItems.isEmpty()) {
+                        Text(
+                            text = "No apps are currently sealed. Seal apps below to manage per-app Token passes.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = HudTextMuted
+                        )
+                    } else {
+                        Text(
+                            text = "1. SELECT SEALED TARGET APP TO UNSEAL:",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SystemManaCyan,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            sealedAppItems.forEach { app ->
+                                val isTargetSelected = selectedExchangePkg == app.packageName
+                                val expiryMs = unsealedAppsExpiryMap[app.packageName] ?: 0L
+                                val remainingMs = (expiryMs - currentTimeMillis).coerceAtLeast(0L)
+                                val isCurrentlyUnsealed = remainingMs > 0L
+                                val remMins = (remainingMs / 60_000L).toInt()
+                                val remSecs = ((remainingMs % 60_000L) / 1000L).toInt()
+
+                                val rowShape = CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp)
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(rowShape)
+                                        .background(
+                                            when {
+                                                isCurrentlyUnsealed -> SovereignRewardGold.copy(alpha = 0.16f)
+                                                isTargetSelected -> SystemManaCyan.copy(alpha = 0.16f)
+                                                else -> AbyssalBackground.copy(alpha = 0.8f)
+                                            },
+                                            rowShape
+                                        )
+                                        .border(
+                                            width = if (isTargetSelected || isCurrentlyUnsealed) 1.5.dp else 1.dp,
+                                            color = when {
+                                                isCurrentlyUnsealed -> SovereignRewardGold
+                                                isTargetSelected -> SystemManaCyan
+                                                else -> HudTextMuted.copy(alpha = 0.4f)
+                                            },
+                                            shape = rowShape
+                                        )
+                                        .clickable {
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            selectedExchangePkg = app.packageName
+                                        }
+                                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                                        .testTag("exchange_select_app_${app.packageName}"),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = app.appName,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            color = if (isTargetSelected) SystemManaCyan else HudTextPrimary,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = app.packageName,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = HudTextSecondary
+                                        )
+                                    }
+
+                                    Text(
+                                        text = if (isCurrentlyUnsealed) {
+                                            "UNSEALED (%02d:%02d)".format(remMins, remSecs)
+                                        } else {
+                                            "SEALED"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (isCurrentlyUnsealed) SovereignRewardGold else PenaltyDangerRed,
+                                        fontWeight = FontWeight.Black
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Text(
+                            text = "2. SELECT FIXED PASS DURATION (10m MULTIPLES UP TO 60m):",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SystemManaCyan,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        val tiersRow1 = FocusRepository.TOKEN_REDEMPTION_TIERS.take(3)
+                        val tiersRow2 = FocusRepository.TOKEN_REDEMPTION_TIERS.drop(3)
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            tiersRow1.forEach { tier ->
+                                SystemDurationChip(
+                                    label = "${tier.minutes}m",
+                                    subLabel = "${tier.tokenCost} TOKENS",
+                                    isSelected = selectedRedemptionMinutes == tier.minutes,
+                                    enabled = true,
+                                    activeColor = SovereignRewardGold,
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        selectedRedemptionMinutes = tier.minutes
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("token_tier_${tier.minutes}m")
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            tiersRow2.forEach { tier ->
+                                SystemDurationChip(
+                                    label = "${tier.minutes}m",
+                                    subLabel = "${tier.tokenCost} TOKENS",
+                                    isSelected = selectedRedemptionMinutes == tier.minutes,
+                                    enabled = true,
+                                    activeColor = SovereignRewardGold,
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        selectedRedemptionMinutes = tier.minutes
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("token_tier_${tier.minutes}m")
+                                )
+                            }
+                        }
+
+                        val targetAppObj = sealedAppItems.find { it.packageName == selectedExchangePkg }
+                            ?: sealedAppItems.first()
+                        val requiredCost = selectedRedemptionMinutes * FocusRepository.TOKENS_PER_APP_MINUTE
+                        val canAfford = rewardTokens >= requiredCost
+
+                        SystemHudButton(
+                            text = if (canAfford) {
+                                "[ UNSEAL ${targetAppObj.appName.uppercase()} FOR ${selectedRedemptionMinutes}m (-$requiredCost TOKENS) ]"
+                            } else {
+                                "[ NEED $requiredCost TOKENS TO UNSEAL ${targetAppObj.appName.uppercase()} (${selectedRedemptionMinutes}m) ]"
+                            },
+                            enabled = canAfford,
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onRedeemTokensForApp(
+                                    targetAppObj.packageName,
+                                    targetAppObj.appName,
+                                    selectedRedemptionMinutes
+                                )
+                            },
+                            primaryColor = SovereignRewardGold,
+                            secondaryColor = SystemManaCyan,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("redeem_tokens_unseal_button")
+                        )
+                    }
+                }
+            }
+        }
+
+        // 3. Short-Form Video & [ FORCE DUNGEON LOCK (TEST MODE) ] Seals Card
         item {
             SystemWindowCard(
                 modifier = Modifier
@@ -232,10 +505,9 @@ fun PenaltySealsScreen(
                         )
                     }
 
-                    // [ FORCE DUNGEON LOCK (TEST MODE) ]
                     SystemSealToggleRow(
                         title = "[ FORCE DUNGEON LOCK (TEST MODE) ]",
-                        subtitle = "Immediately lock all sealed apps and Shorts/Reels right now without waiting for the timer.",
+                        subtitle = "Immediately arm Dungeon Lock to test the 3-second Crimson Overlay kick-out right now.",
                         checked = forceDungeonLockTestMode || isBlockingActive,
                         onCheckedChange = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -244,10 +516,9 @@ fun PenaltySealsScreen(
                         testTag = "force_dungeon_lock_switch"
                     )
 
-                    // [ SEAL YOUTUBE SHORTS ]
                     SystemSealToggleRow(
                         title = stringResource(id = R.string.seal_youtube_shorts),
-                        subtitle = "Multi-window node scanner detects 'reel_player', 'shorts_', or selected 'Shorts' tab and triggers GLOBAL_ACTION_BACK.",
+                        subtitle = "Detects 'reel_player' / 'shorts_' and triggers GLOBAL_ACTION_BACK + Crimson Overlay.",
                         checked = sealYoutubeShorts,
                         onCheckedChange = {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -256,10 +527,9 @@ fun PenaltySealsScreen(
                         testTag = "seal_youtube_shorts_switch"
                     )
 
-                    // [ SEAL INSTAGRAM REELS ]
                     SystemSealToggleRow(
                         title = stringResource(id = R.string.seal_instagram_reels),
-                        subtitle = "Multi-window node scanner detects 'clips_viewer', 'reel_viewer', or active 'Reels' tab and triggers GLOBAL_ACTION_BACK.",
+                        subtitle = "Detects 'clips_viewer' / 'reel_viewer' and triggers GLOBAL_ACTION_BACK + Crimson Overlay.",
                         checked = sealInstagramReels,
                         onCheckedChange = {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -271,7 +541,7 @@ fun PenaltySealsScreen(
             }
         }
 
-        // 3. Installed-App Blocker List Header & Search
+        // 4. Installed-App Blocker List Header & Search
         item {
             SystemWindowCard(
                 modifier = Modifier
@@ -313,7 +583,7 @@ fun PenaltySealsScreen(
 
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Sealed apps trigger GLOBAL_ACTION_HOME + '[ ! SYSTEM PENALTY: ACCESS DENIED UNTIL FOCUS COMPLETE ]' Toast when opened while locked.",
+                        text = "Sealed apps are blocked during Dungeon Lock unless individually unsealed in the Token Exchange above.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = HudTextSecondary
                     )
@@ -356,9 +626,15 @@ fun PenaltySealsScreen(
             }
         }
 
-        // 4. Installed-App Blocker Rows
+        // 5. Installed-App Blocker Rows
         items(items = filteredApps, key = { it.packageName }) { appItem ->
             val isSealed = blockedPackages.contains(appItem.packageName)
+            val expiryMs = unsealedAppsExpiryMap[appItem.packageName] ?: 0L
+            val remainingMs = (expiryMs - currentTimeMillis).coerceAtLeast(0L)
+            val isTemporarilyUnsealed = isSealed && remainingMs > 0L
+            val remMins = (remainingMs / 60_000L).toInt()
+            val remSecs = ((remainingMs % 60_000L) / 1000L).toInt()
+
             val shape = CutCornerShape(topStart = 10.dp, bottomEnd = 10.dp)
 
             Row(
@@ -366,16 +642,20 @@ fun PenaltySealsScreen(
                     .fillMaxWidth()
                     .clip(shape)
                     .background(
-                        if (isSealed) {
-                            PenaltyDangerRed.copy(alpha = 0.12f)
-                        } else {
-                            SystemWindowSurfaceElevated.copy(alpha = 0.85f)
+                        when {
+                            isTemporarilyUnsealed -> SovereignRewardGold.copy(alpha = 0.14f)
+                            isSealed -> PenaltyDangerRed.copy(alpha = 0.12f)
+                            else -> SystemWindowSurfaceElevated.copy(alpha = 0.85f)
                         },
                         shape
                     )
                     .border(
                         width = 1.2.dp,
-                        color = if (isSealed) PenaltyDangerRed else RoyalSystemBlue.copy(alpha = 0.45f),
+                        color = when {
+                            isTemporarilyUnsealed -> SovereignRewardGold
+                            isSealed -> PenaltyDangerRed
+                            else -> RoyalSystemBlue.copy(alpha = 0.45f)
+                        },
                         shape = shape
                     )
                     .clickable {
@@ -398,15 +678,27 @@ fun PenaltySealsScreen(
                             .background(AbyssalBackground)
                             .border(
                                 width = 1.dp,
-                                color = if (isSealed) PenaltyDangerRed else SystemManaCyan,
+                                color = when {
+                                    isTemporarilyUnsealed -> SovereignRewardGold
+                                    isSealed -> PenaltyDangerRed
+                                    else -> SystemManaCyan
+                                },
                                 shape = CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp)
                             ),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = if (isSealed) Icons.Default.Lock else Icons.Default.LockOpen,
+                            imageVector = if (isSealed && !isTemporarilyUnsealed) {
+                                Icons.Default.Lock
+                            } else {
+                                Icons.Default.LockOpen
+                            },
                             contentDescription = if (isSealed) "App Sealed" else "App Unsealed",
-                            tint = if (isSealed) PenaltyDangerRed else SystemManaCyan,
+                            tint = when {
+                                isTemporarilyUnsealed -> SovereignRewardGold
+                                isSealed -> PenaltyDangerRed
+                                else -> SystemManaCyan
+                            },
                             modifier = Modifier.size(18.dp)
                         )
                     }
@@ -419,9 +711,13 @@ fun PenaltySealsScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = appItem.packageName,
+                            text = if (isTemporarilyUnsealed) {
+                                "TOKEN PASS ACTIVE: %02d:%02d REMAINING".format(remMins, remSecs)
+                            } else {
+                                appItem.packageName
+                            },
                             style = MaterialTheme.typography.bodyMedium,
-                            color = HudTextSecondary
+                            color = if (isTemporarilyUnsealed) SovereignRewardGold else HudTextSecondary
                         )
                     }
                 }

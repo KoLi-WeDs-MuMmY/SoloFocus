@@ -35,11 +35,12 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Token
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -101,7 +102,6 @@ fun SystemWindowCard(
             .background(surfaceColor, shape)
             .border(width = 1.5.dp, brush = borderBrush, shape = shape)
             .drawBehind {
-                // Subtle horizontal scanlines inside the System Window
                 val stepPx = 6.dp.toPx()
                 var y = 0f
                 while (y < size.height) {
@@ -114,7 +114,6 @@ fun SystemWindowCard(
                     y += stepPx
                 }
 
-                // Glowing corner brackets in top-end and bottom-start
                 val bracketLen = 14.dp.toPx()
                 val stroke = 2.dp.toPx()
                 val inset = 4.dp.toPx()
@@ -186,6 +185,9 @@ fun SystemBackgroundScanlines(
 @Composable
 fun PlayerStatusHeaderCard(
     stats: PlayerStatsState,
+    rewardTokens: Int,
+    canDrawOverlays: Boolean,
+    onRequestOverlayPermission: () -> Unit,
     activeBanner: SystemAlertBanner?,
     onDismissBanner: () -> Unit,
     modifier: Modifier = Modifier
@@ -213,7 +215,10 @@ fun PlayerStatusHeaderCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
                         Box(
                             modifier = Modifier
                                 .clip(CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp))
@@ -257,29 +262,64 @@ fun PlayerStatusHeaderCard(
 
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clip(CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp))
-                            .background(AbyssalBackground.copy(alpha = 0.8f))
-                            .border(
-                                width = 1.dp,
-                                color = SovereignRewardGold.copy(alpha = 0.7f),
-                                shape = CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp)
-                            )
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.LocalFireDepartment,
-                            contentDescription = "Streak Days",
-                            tint = SovereignRewardGold,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "${stats.streakDays}D STREAK",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = SovereignRewardGold,
-                            fontWeight = FontWeight.Black
-                        )
+                        // Reward Token Vault Badge
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp))
+                                .background(AbyssalBackground.copy(alpha = 0.9f))
+                                .border(
+                                    width = 1.dp,
+                                    color = SovereignRewardGold,
+                                    shape = CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp)
+                                )
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                .testTag("header_reward_tokens_badge")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Token,
+                                contentDescription = "Reward Tokens",
+                                tint = SovereignRewardGold,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "$rewardTokens TOKENS",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = SovereignRewardGold,
+                                fontWeight = FontWeight.Black
+                            )
+                        }
+
+                        // Streak Badge
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp))
+                                .background(AbyssalBackground.copy(alpha = 0.8f))
+                                .border(
+                                    width = 1.dp,
+                                    color = SystemManaCyan.copy(alpha = 0.7f),
+                                    shape = CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp)
+                                )
+                                .padding(horizontal = 7.dp, vertical = 4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.LocalFireDepartment,
+                                contentDescription = "Streak Days",
+                                tint = SystemManaCyan,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text(
+                                text = "${stats.streakDays}D",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = SystemManaCyan,
+                                fontWeight = FontWeight.Black
+                            )
+                        }
                     }
                 }
 
@@ -315,13 +355,11 @@ fun PlayerStatusHeaderCard(
                     val barHeight = size.height
                     val barWidth = size.width
 
-                    // Background track
                     drawRect(
                         color = AbyssalBackground,
                         size = Size(barWidth, barHeight)
                     )
 
-                    // Active Cyan-to-Purple XP fill
                     val fillWidth = (barWidth * animatedXpProgress).coerceAtLeast(0f)
                     if (fillWidth > 0f) {
                         drawRect(
@@ -332,7 +370,6 @@ fun PlayerStatusHeaderCard(
                         )
                     }
 
-                    // Geometric segment ticks across the XP bar
                     val segments = 10
                     val segmentStep = barWidth / segments
                     for (i in 1 until segments) {
@@ -345,17 +382,30 @@ fun PlayerStatusHeaderCard(
                         )
                     }
 
-                    // Outer border
                     drawRect(
                         color = SystemManaCyan.copy(alpha = 0.55f),
                         size = Size(barWidth, barHeight),
                         style = Stroke(width = 1.dp.toPx())
                     )
                 }
+
+                // If SYSTEM_ALERT_WINDOW permission is missing, display quick-grant button right in the header
+                if (!canDrawOverlays) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    SystemHudButton(
+                        text = "[ GRANT OVERLAY SYSTEM AUTHORITY ]",
+                        onClick = onRequestOverlayPermission,
+                        primaryColor = PenaltyDangerRed,
+                        secondaryColor = MonarchShadowPurple,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("header_grant_overlay_permission_button")
+                    )
+                }
             }
         }
 
-        // Animated [ LEVEL UP! ] or [ QUEST CLEARED: REWARD TIME UNLOCKED ] alert banner
+        // Animated [ LEVEL UP! ] or [ DUNGEON CLEARED ] alert banner
         AnimatedVisibility(
             visible = activeBanner != null,
             enter = fadeIn() + expandVertically(),
@@ -444,6 +494,8 @@ fun ManaCoreTimerDial(
     timerPhase: TimerPhase,
     isTimerRunning: Boolean,
     isBlockingActive: Boolean,
+    expectedTokenYield: Int,
+    boundQuestTitle: String?,
     modifier: Modifier = Modifier
 ) {
     val progress = if (totalSeconds > 0) {
@@ -479,10 +531,6 @@ fun ManaCoreTimerDial(
         label = "core_pulse"
     )
 
-    // Color scheme based on System HUD state:
-    // - Sovereign Gold when Reward Time is unlocked
-    // - Crimson Red when Dungeon Lock is active
-    // - Electric Cyan-Blue when Idle / Standby
     val primaryDialColor = when {
         timerPhase == TimerPhase.REWARD_UNLOCK -> SovereignRewardGold
         timerPhase == TimerPhase.FOCUS_LOCK || isBlockingActive -> PenaltyDangerRed
@@ -501,7 +549,7 @@ fun ManaCoreTimerDial(
 
     val statusSubLabel = when (timerPhase) {
         TimerPhase.FOCUS_LOCK -> "[ DUNGEON LOCK: ACTIVE ]"
-        TimerPhase.REWARD_UNLOCK -> "[ REWARD TIME UNLOCKED ]"
+        TimerPhase.REWARD_UNLOCK -> "[ TOKENS DEPOSITED ]"
         TimerPhase.IDLE -> if (isBlockingActive) "[ DUNGEON LOCK: ARMED ]" else "[ MANA CORE: STANDBY ]"
     }
 
@@ -516,7 +564,6 @@ fun ManaCoreTimerDial(
             val innerRingRadius = diameter * 0.36f
             val hexRadius = diameter * 0.27f
 
-            // 1. Subtle radial mana aura
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
@@ -530,7 +577,6 @@ fun ManaCoreTimerDial(
                 center = center
             )
 
-            // 2. Outer Geometric Tick Ring (60 tick marks)
             val tickCount = 60
             val activeTicks = (tickCount * animatedProgress).toInt()
             for (i in 0 until tickCount) {
@@ -561,11 +607,9 @@ fun ManaCoreTimerDial(
                 )
             }
 
-            // 3. Dual-Ring Progress Arc
             val arcSize = Size(innerRingRadius * 2f, innerRingRadius * 2f)
             val arcTopLeft = Offset(center.x - innerRingRadius, center.y - innerRingRadius)
 
-            // Background ring
             drawArc(
                 color = HudTextMuted.copy(alpha = 0.2f),
                 startAngle = 0f,
@@ -576,7 +620,6 @@ fun ManaCoreTimerDial(
                 style = Stroke(width = 6.dp.toPx(), cap = StrokeCap.Butt)
             )
 
-            // Active glowing mana arc
             drawArc(
                 brush = Brush.sweepGradient(
                     colors = listOf(primaryDialColor, secondaryDialColor, primaryDialColor),
@@ -590,7 +633,6 @@ fun ManaCoreTimerDial(
                 style = Stroke(width = 6.dp.toPx(), cap = StrokeCap.Square)
             )
 
-            // 4. Rotating Inner Hexagonal Mana Core
             rotate(degrees = if (isTimerRunning) rotationDegrees else 0f, pivot = center) {
                 val hexPath = Path()
                 for (side in 0 until 6) {
@@ -608,7 +650,6 @@ fun ManaCoreTimerDial(
                 )
             }
 
-            // 5. Corner Targeting Reticles around the dial
             val reticleInset = diameter * 0.06f
             val reticleLength = 16.dp.toPx()
             val reticleStroke = 2.dp.toPx()
@@ -617,24 +658,20 @@ fun ManaCoreTimerDial(
             val top = center.y - outerRadius - reticleInset
             val bottom = center.y + outerRadius + reticleInset
 
-            // Top-left reticle
             drawLine(primaryDialColor, Offset(left, top), Offset(left + reticleLength, top), reticleStroke)
             drawLine(primaryDialColor, Offset(left, top), Offset(left, top + reticleLength), reticleStroke)
-            // Top-right reticle
             drawLine(primaryDialColor, Offset(right - reticleLength, top), Offset(right, top), reticleStroke)
             drawLine(primaryDialColor, Offset(right, top), Offset(right, top + reticleLength), reticleStroke)
-            // Bottom-left reticle
             drawLine(primaryDialColor, Offset(left, bottom - reticleLength), Offset(left, bottom), reticleStroke)
             drawLine(primaryDialColor, Offset(left, bottom), Offset(left + reticleLength, bottom), reticleStroke)
-            // Bottom-right reticle
             drawLine(primaryDialColor, Offset(right, bottom - reticleLength), Offset(right, bottom), reticleStroke)
             drawLine(primaryDialColor, Offset(right - reticleLength, bottom), Offset(right, bottom), reticleStroke)
         }
 
-        // Digital Readout inside the Mana Core
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(horizontal = 24.dp)
         ) {
             Text(
                 text = statusSubLabel,
@@ -656,15 +693,23 @@ fun ManaCoreTimerDial(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = when (timerPhase) {
-                    TimerPhase.FOCUS_LOCK -> "REWARD: +100 XP ON CLEAR"
-                    TimerPhase.REWARD_UNLOCK -> "SEALS UNLOCKED • ENJOY REWARD"
-                    TimerPhase.IDLE -> "SELECT DURATION & ENTER DUNGEON"
-                },
+                text = "YIELD: +$expectedTokenYield TOKENS & +100 XP",
                 style = MaterialTheme.typography.labelSmall,
-                color = HudTextSecondary,
+                color = SovereignRewardGold,
+                fontWeight = FontWeight.Black,
                 textAlign = TextAlign.Center
             )
+            if (!boundQuestTitle.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "BOUND: $boundQuestTitle",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SystemManaCyan,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1
+                )
+            }
         }
     }
 }
@@ -672,6 +717,7 @@ fun ManaCoreTimerDial(
 @Composable
 fun SystemDurationChip(
     label: String,
+    subLabel: String? = null,
     isSelected: Boolean,
     enabled: Boolean,
     activeColor: Color = SystemManaCyan,
@@ -689,20 +735,30 @@ fun SystemDurationChip(
     Box(
         modifier = modifier
             .minimumInteractiveComponentSize()
-            .height(48.dp)
+            .height(52.dp)
             .clip(shape)
             .background(bgColor, shape)
             .border(width = if (isSelected) 1.5.dp else 1.dp, color = borderColor, shape = shape)
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 14.dp),
+            .padding(horizontal = 8.dp, vertical = 4.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.titleMedium,
-            color = if (isSelected) activeColor else HudTextSecondary,
-            fontWeight = if (isSelected) FontWeight.Black else FontWeight.Bold
-        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleMedium,
+                color = if (isSelected) activeColor else HudTextSecondary,
+                fontWeight = if (isSelected) FontWeight.Black else FontWeight.Bold
+            )
+            if (!subLabel.isNullOrBlank()) {
+                Text(
+                    text = subLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isSelected) SovereignRewardGold else HudTextMuted,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
     }
 }
 

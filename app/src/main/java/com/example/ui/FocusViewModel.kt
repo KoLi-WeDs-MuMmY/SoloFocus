@@ -3,6 +3,7 @@ package com.example.ui
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.provider.Settings
 import android.text.TextUtils
 import androidx.lifecycle.AndroidViewModel
@@ -43,8 +44,9 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     val playerStats: StateFlow<PlayerStatsState> = FocusRepository.playerStats
+    val rewardTokens: StateFlow<Int> = FocusRepository.rewardTokens
     val focusDurationMinutes: StateFlow<Int> = FocusRepository.focusDurationMinutes
-    val rewardDurationMinutes: StateFlow<Int> = FocusRepository.rewardDurationMinutes
+    val boundQuestId: StateFlow<String?> = FocusRepository.boundQuestId
     val timerPhase: StateFlow<TimerPhase> = FocusRepository.timerPhase
     val remainingSeconds: StateFlow<Int> = FocusRepository.remainingSeconds
     val totalPhaseSeconds: StateFlow<Int> = FocusRepository.totalPhaseSeconds
@@ -54,6 +56,7 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
     val sealYoutubeShorts: StateFlow<Boolean> = FocusRepository.sealYoutubeShorts
     val sealInstagramReels: StateFlow<Boolean> = FocusRepository.sealInstagramReels
     val blockedPackages: StateFlow<Set<String>> = FocusRepository.blockedPackages
+    val unsealedAppsExpiryMap: StateFlow<Map<String, Long>> = FocusRepository.unsealedAppsExpiryMap
     val dailyQuests: StateFlow<List<DailyQuest>> = FocusRepository.dailyQuests
     val geminiApiKey: StateFlow<String> = FocusRepository.geminiApiKey
     val activeBanner: StateFlow<SystemAlertBanner?> = FocusRepository.activeBanner
@@ -64,6 +67,12 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isAccessibilityServiceEnabled = MutableStateFlow(false)
     val isAccessibilityServiceEnabled: StateFlow<Boolean> = _isAccessibilityServiceEnabled.asStateFlow()
+
+    private val _canDrawOverlays = MutableStateFlow(true)
+    val canDrawOverlays: StateFlow<Boolean> = _canDrawOverlays.asStateFlow()
+
+    private val _currentTimeMillis = MutableStateFlow(System.currentTimeMillis())
+    val currentTimeMillis: StateFlow<Long> = _currentTimeMillis.asStateFlow()
 
     private val _installedApps = MutableStateFlow<List<InstalledAppItem>>(emptyList())
     val installedApps: StateFlow<List<InstalledAppItem>> = _installedApps.asStateFlow()
@@ -93,20 +102,17 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
     init {
         refreshAccessibilityStatus()
         loadInstalledApps()
-        observeTimerLoop()
+        observeTimerAndUnsealClock()
     }
 
-    private fun observeTimerLoop() {
+    private fun observeTimerAndUnsealClock() {
         viewModelScope.launch {
-            isTimerRunning.collect { running ->
-                timerJob?.cancel()
-                if (running) {
-                    timerJob = viewModelScope.launch {
-                        while (isTimerRunning.value) {
-                            delay(1000L)
-                            FocusRepository.tickOneSecond()
-                        }
-                    }
+            while (true) {
+                delay(1000L)
+                _currentTimeMillis.value = System.currentTimeMillis()
+                FocusRepository.pruneExpiredUnseals(_currentTimeMillis.value)
+                if (isTimerRunning.value) {
+                    FocusRepository.tickOneSecond()
                 }
             }
         }
@@ -120,8 +126,8 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         FocusRepository.setFocusDuration(minutes)
     }
 
-    fun selectRewardDuration(minutes: Int) {
-        FocusRepository.setRewardDuration(minutes)
+    fun bindQuestToTimer(questId: String?) {
+        FocusRepository.bindQuestToTimer(questId)
     }
 
     fun startOrToggleDungeonTimer() {
@@ -139,6 +145,12 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         FocusRepository.onPhaseReachedZero()
     }
 
+    fun redeemTokensForApp(packageName: String, appName: String, minutes: Int): Boolean {
+        val result = FocusRepository.redeemTokensForApp(packageName, appName, minutes)
+        _currentTimeMillis.value = System.currentTimeMillis()
+        return result
+    }
+
     fun toggleQuest(questId: String) {
         FocusRepository.toggleQuestCompletion(questId)
     }
@@ -147,11 +159,6 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         FocusRepository.saveGeminiApiKey(apiKey)
     }
 
-    /**
-     * Triggers strictly ONE single request to the Gemini 2.5 Flash System Arbiter (or offline
-     * heuristic fallback if no key/network is available) ONLY when the user explicitly clicks
-     * [ SUBMIT QUEST TO SYSTEM ].
-     */
     fun submitQuestToArbiter(rawQuestTitle: String) {
         val trimmed = rawQuestTitle.trim()
         if (trimmed.isEmpty() || _isArbiterEvaluating.value) return
@@ -211,6 +218,20 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         val context = getApplication<Application>()
         FocusRepository.init(context)
         _isAccessibilityServiceEnabled.value = checkAccessibilityEnabled(context)
+        _canDrawOverlays.value = checkOverlayPermissionEnabled(context)
+        _currentTimeMillis.value = System.currentTimeMillis()
+    }
+
+    private fun checkOverlayPermissionEnabled(context: Context): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                Settings.canDrawOverlays(context)
+            } else {
+                true
+            }
+        } catch (_: Exception) {
+            true
+        }
     }
 
     private fun checkAccessibilityEnabled(context: Context): Boolean {

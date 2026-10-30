@@ -59,6 +59,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -102,7 +103,6 @@ fun DailyQuestsScreen(
     val totalCount = quests.size
     val allCleared = totalCount > 0 && completedCount == totalCount
 
-    // Glowing [ ! SYSTEM ARBITER VERDICT ] Popup Window
     if (latestArbiterVerdict != null) {
         SystemArbiterVerdictDialog(
             verdictResult = latestArbiterVerdict,
@@ -274,7 +274,6 @@ fun DailyQuestsScreen(
             contentPadding = 16.dp
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                // Header: [ ! QUEST INFO ] & [ DAILY QUEST: THE PLAYER'S PREPARATION ]
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -282,7 +281,7 @@ fun DailyQuestsScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "[ ! QUEST INFO ]",
+                            text = "[ ! QUEST INFO • MIDNIGHT RESET ACTIVE ]",
                             style = MaterialTheme.typography.labelLarge,
                             color = if (allCleared) SovereignRewardGold else SystemManaCyan,
                             fontWeight = FontWeight.Black
@@ -296,26 +295,27 @@ fun DailyQuestsScreen(
                         )
                     }
 
-                    IconButton(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onResetDailyQuests()
-                        },
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .testTag("reset_daily_quests_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = "Reset Daily Quests",
-                            tint = SystemManaCyan
-                        )
+                    if (quests.isNotEmpty()) {
+                        IconButton(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onResetDailyQuests()
+                            },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("reset_daily_quests_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Reset Daily Quests",
+                                tint = SystemManaCyan
+                            )
+                        }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Goal Progress Indicator Row
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -331,16 +331,16 @@ fun DailyQuestsScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "GOAL COMPLETION STATUS",
+                        text = "DAILY LOG (CLEARS AT 00:00)",
                         style = MaterialTheme.typography.labelSmall,
                         color = HudTextSecondary,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = if (allCleared) {
-                            "[ ALL CLEARED: $completedCount/$totalCount ]"
-                        } else {
-                            "[ INCOMPLETE: $completedCount/$totalCount ]"
+                        text = when {
+                            totalCount == 0 -> "[ 0 QUESTS REGISTERED ]"
+                            allCleared -> "[ ALL CLEARED: $completedCount/$totalCount ]"
+                            else -> "[ INCOMPLETE: $completedCount/$totalCount ]"
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = if (allCleared) SovereignRewardGold else SystemManaCyan,
@@ -350,7 +350,6 @@ fun DailyQuestsScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Single-Request Gemini System Arbiter Quest Input + Submit Button
                 OutlinedTextField(
                     value = newQuestTitle,
                     onValueChange = { newQuestTitle = it },
@@ -404,26 +403,63 @@ fun DailyQuestsScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Scrollable Quests List
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .testTag("daily_quests_list"),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(items = quests, key = { it.id }) { quest ->
-                        DailyQuestItemRow(
-                            quest = quest,
-                            onToggle = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onToggleQuest(quest.id)
-                            },
-                            onDelete = {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                onDeleteQuest(quest.id)
-                            }
-                        )
+                if (quests.isEmpty()) {
+                    // Empty Daily Quests zero-state (starts at 0 quests every day and resets at midnight)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .clip(CutCornerShape(topStart = 10.dp, bottomEnd = 10.dp))
+                            .background(AbyssalBackground.copy(alpha = 0.65f))
+                            .border(
+                                width = 1.dp,
+                                color = RoyalSystemBlue.copy(alpha = 0.35f),
+                                shape = CutCornerShape(topStart = 10.dp, bottomEnd = 10.dp)
+                            )
+                            .padding(20.dp)
+                            .testTag("empty_daily_quests_state"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "[ 0 DAILY QUESTS ACTIVE ]",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = SystemManaCyan,
+                                fontWeight = FontWeight.Black,
+                                textAlign = TextAlign.Center
+                            )
+                            Text(
+                                text = "Your Daily Quest log starts empty each day and automatically resets at midnight (00:00). Submit a goal above for System Arbiter evaluation, then bind it to your Focus Timer.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = HudTextSecondary,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .testTag("daily_quests_list"),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(items = quests, key = { it.id }) { quest ->
+                            DailyQuestItemRow(
+                                quest = quest,
+                                onToggle = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onToggleQuest(quest.id)
+                                },
+                                onDelete = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    onDeleteQuest(quest.id)
+                                }
+                            )
+                        }
                     }
                 }
 
@@ -471,7 +507,6 @@ private fun SystemArbiterVerdictDialog(
     verdictResult: ArbiterVerdictResult,
     onDismiss: () -> Unit
 ) {
-    // Cyan for COMPLY, Monarch Purple for MODIFY, Crimson Red for DECLINE
     val accentColor = when (verdictResult.verdict) {
         "COMPLY" -> SystemManaCyan
         "MODIFY" -> MonarchShadowPurple
@@ -519,7 +554,6 @@ private fun SystemArbiterVerdictDialog(
                     )
                 }
 
-                // Verdict & XP Badge Row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -574,7 +608,6 @@ private fun SystemArbiterVerdictDialog(
                     )
                 }
 
-                // Final Approved / Modified / Rejected Quest Title Box
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -742,7 +775,7 @@ private fun DailyQuestItemRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = if (quest.isCompleted) "[ CLEARED ]" else "[ INCOMPLETE ]",
+                        text = if (quest.isCompleted) "[ CLEARED • UNCHECK DEDUCTS XP ]" else "[ INCOMPLETE ]",
                         style = MaterialTheme.typography.labelSmall,
                         color = if (quest.isCompleted) SovereignRewardGold else SystemManaCyan,
                         fontWeight = FontWeight.Black
@@ -753,14 +786,6 @@ private fun DailyQuestItemRow(
                         color = MonarchShadowPurple,
                         fontWeight = FontWeight.Black
                     )
-                    if (quest.arbiterVerdict != null) {
-                        Text(
-                            text = "[ ARBITER: ${quest.arbiterVerdict} ]",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (quest.arbiterVerdict == "MODIFY") MonarchShadowPurple else SystemManaCyan,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
                 }
             }
         }

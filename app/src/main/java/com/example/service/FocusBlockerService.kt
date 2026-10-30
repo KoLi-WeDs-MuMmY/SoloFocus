@@ -1,21 +1,35 @@
 package com.example.service
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
+import android.util.TypedValue
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import com.example.data.FocusRepository
-import com.example.data.TimerPhase
 
 class FocusBlockerService : AccessibilityService() {
 
     private var lastBlockActionTime: Long = 0L
     private val mainHandler = Handler(Looper.getMainLooper())
     private var cachedHomePackage: String? = null
+    private var activePenaltyOverlayView: View? = null
+    private val dismissOverlayRunnable = Runnable { removePenaltyOverlay() }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -50,21 +64,24 @@ class FocusBlockerService : AccessibilityService() {
             return
         }
 
-        val isRewardUnlocked = FocusRepository.timerPhase.value == TimerPhase.REWARD_UNLOCK &&
-            !FocusRepository.forceDungeonLockTestMode.value
-        if (isRewardUnlocked) {
+        // Check if this specific app package has been temporarily unsealed via Reward Tokens!
+        if (FocusRepository.isPackageTemporarilyUnsealed(eventPackage, now)) {
             return
         }
 
         val isBlockingActive = FocusRepository.isBlockingActive.value
         val blockedPackages = FocusRepository.blockedPackages.value
 
-        // 1. REAL APP BLOCKING: Immediately send user Home and show System Penalty Toast
+        // 1. REAL APP BLOCKING: Kick user Home and show 3-second Crimson WindowManager Penalty Overlay
         if (isBlockingActive && blockedPackages.contains(eventPackage)) {
             lastBlockActionTime = now
             FocusRepository.recordBlockedInterception("Sealed App Blocked: $eventPackage")
             performGlobalAction(GLOBAL_ACTION_HOME)
-            showSystemPenaltyToast("[ ! SYSTEM PENALTY: ACCESS DENIED UNTIL FOCUS COMPLETE ]")
+            triggerSystemPenaltyOverlayOrToast(
+                headerTitle = "[ ! SYSTEM PENALTY: ACCESS DENIED ]",
+                subtitle = "[ ! SYSTEM PENALTY: DUNGEON LOCK ACTIVE ]",
+                detail = "TARGET SEALED: $eventPackage\nComplete Focus Dungeons to earn Reward Tokens and unseal this application."
+            )
             return
         }
 
@@ -82,21 +99,177 @@ class FocusBlockerService : AccessibilityService() {
         for (rootNode in rootNodes) {
             val nodePkg = rootNode.packageName?.toString() ?: eventPackage
 
+            // Respect per-app Token unseal if the user explicitly unsealed YouTube or Instagram
+            if (FocusRepository.isPackageTemporarilyUnsealed(nodePkg, now)) {
+                continue
+            }
+
             if (sealShorts && isYoutubeShortsDetected(nodePkg, rootNode)) {
                 lastBlockActionTime = now
-                FocusRepository.recordBlockedInterception("YouTube Shorts Sealed -> GLOBAL_ACTION_BACK")
+                FocusRepository.recordBlockedInterception("YouTube Shorts Sealed -> Kick-Out")
                 performGlobalAction(GLOBAL_ACTION_BACK)
-                showSystemPenaltyToast("[ ! SYSTEM SEAL: YOUTUBE SHORTS RESTRICTED ]")
+                triggerSystemPenaltyOverlayOrToast(
+                    headerTitle = "[ ! SYSTEM PENALTY: ACCESS DENIED ]",
+                    subtitle = "[ ! SYSTEM PENALTY: DUNGEON LOCK ACTIVE ]",
+                    detail = "YOUTUBE SHORTS FEED SEALED BY THE SYSTEM.\nShort-form scrolling is forbidden."
+                )
                 return
             }
 
             if (sealReels && isInstagramReelsDetected(nodePkg, rootNode)) {
                 lastBlockActionTime = now
-                FocusRepository.recordBlockedInterception("Instagram Reels Sealed -> GLOBAL_ACTION_BACK")
+                FocusRepository.recordBlockedInterception("Instagram Reels Sealed -> Kick-Out")
                 performGlobalAction(GLOBAL_ACTION_BACK)
-                showSystemPenaltyToast("[ ! SYSTEM SEAL: INSTAGRAM REELS RESTRICTED ]")
+                triggerSystemPenaltyOverlayOrToast(
+                    headerTitle = "[ ! SYSTEM PENALTY: ACCESS DENIED ]",
+                    subtitle = "[ ! SYSTEM PENALTY: DUNGEON LOCK ACTIVE ]",
+                    detail = "INSTAGRAM REELS FEED SEALED BY THE SYSTEM.\nShort-form scrolling is forbidden."
+                )
                 return
             }
+        }
+    }
+
+    /**
+     * Uses WindowManager (SYSTEM_ALERT_WINDOW / TYPE_APPLICATION_OVERLAY) to draw a full-screen,
+     * un-dismissible Crimson Red Solo Leveling warning overlay for 3 seconds (2.5-3s) to
+     * aggressively kick the user out of the distraction. Falls back to Toast if permission is missing.
+     */
+    private fun triggerSystemPenaltyOverlayOrToast(
+        headerTitle: String,
+        subtitle: String,
+        detail: String
+    ) {
+        mainHandler.post {
+            val canOverlay = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                Settings.canDrawOverlays(applicationContext)
+            } else {
+                true
+            }
+
+            if (!canOverlay) {
+                Toast.makeText(
+                    applicationContext,
+                    "$headerTitle • $subtitle",
+                    Toast.LENGTH_SHORT
+                ).show()
+                return@post
+            }
+
+            try {
+                removePenaltyOverlay()
+                val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return@post
+
+                val overlayContainer = LinearLayout(applicationContext).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER
+                    setBackgroundColor(Color.parseColor("#EB050811"))
+                    setPadding(64, 64, 64, 64)
+                }
+
+                val cardDrawable = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    setColor(Color.parseColor("#F51A050D"))
+                    setStroke(6, Color.parseColor("#FFFF1744"))
+                    cornerRadius = 12f
+                }
+
+                val innerBox = LinearLayout(applicationContext).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER
+                    background = cardDrawable
+                    setPadding(56, 64, 56, 64)
+                }
+
+                val alertHeaderView = TextView(applicationContext).apply {
+                    text = headerTitle
+                    setTextColor(Color.parseColor("#FFFF1744"))
+                    typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+                    gravity = Gravity.CENTER
+                    letterSpacing = 0.1f
+                }
+
+                val subHeaderView = TextView(applicationContext).apply {
+                    text = subtitle
+                    setTextColor(Color.parseColor("#FFFFD600"))
+                    typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                    gravity = Gravity.CENTER
+                    setPadding(0, 24, 0, 24)
+                }
+
+                val detailView = TextView(applicationContext).apply {
+                    text = detail
+                    setTextColor(Color.parseColor("#FFE8F6FF"))
+                    typeface = Typeface.MONOSPACE
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    gravity = Gravity.CENTER
+                }
+
+                val countdownNoteView = TextView(applicationContext).apply {
+                    text = "[ ENFORCING SYSTEM LOCKOUT... ]"
+                    setTextColor(Color.parseColor("#FF00E5FF"))
+                    typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                    gravity = Gravity.CENTER
+                    setPadding(0, 36, 0, 0)
+                }
+
+                innerBox.addView(alertHeaderView)
+                innerBox.addView(subHeaderView)
+                innerBox.addView(detailView)
+                innerBox.addView(countdownNoteView)
+                overlayContainer.addView(
+                    innerBox,
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    )
+                )
+
+                val layoutFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                } else {
+                    @Suppress("DEPRECATION")
+                    WindowManager.LayoutParams.TYPE_PHONE
+                }
+
+                val params = WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    layoutFlag,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+                    PixelFormat.TRANSLUCENT
+                ).apply {
+                    gravity = Gravity.CENTER
+                }
+
+                wm.addView(overlayContainer, params)
+                activePenaltyOverlayView = overlayContainer
+                mainHandler.removeCallbacks(dismissOverlayRunnable)
+                // Keep the full-screen Crimson Penalty Overlay visible for 2.8 seconds (2.5-3s)
+                mainHandler.postDelayed(dismissOverlayRunnable, 2800L)
+            } catch (_: Exception) {
+                Toast.makeText(
+                    applicationContext,
+                    "$headerTitle • $subtitle",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
+    private fun removePenaltyOverlay() {
+        val view = activePenaltyOverlayView ?: return
+        activePenaltyOverlayView = null
+        try {
+            val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+            wm?.removeViewImmediate(view)
+        } catch (_: Exception) {
+            // View already detached
         }
     }
 
@@ -189,12 +362,6 @@ class FocusBlockerService : AccessibilityService() {
         return false
     }
 
-    private fun showSystemPenaltyToast(message: String) {
-        mainHandler.post {
-            Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
-        }
-    }
-
     private fun resolveDefaultHomeLauncherPackage(): String? {
         return try {
             val intent = Intent(Intent.ACTION_MAIN).apply {
@@ -207,7 +374,13 @@ class FocusBlockerService : AccessibilityService() {
         }
     }
 
+    override fun onDestroy() {
+        mainHandler.removeCallbacks(dismissOverlayRunnable)
+        removePenaltyOverlay()
+        super.onDestroy()
+    }
+
     override fun onInterrupt() {
-        // System Accessibility Service interrupted
+        removePenaltyOverlay()
     }
 }

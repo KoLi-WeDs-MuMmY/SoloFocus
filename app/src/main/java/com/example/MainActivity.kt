@@ -1,6 +1,9 @@
 package com.example
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -32,16 +35,21 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.ArbiterVerdictResult
@@ -80,9 +88,25 @@ class MainActivity : ComponentActivity() {
 fun SystemFocusHudApp(
     viewModel: FocusViewModel = viewModel()
 ) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshAccessibilityStatus()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     val playerStats by viewModel.playerStats.collectAsStateWithLifecycle()
+    val rewardTokens by viewModel.rewardTokens.collectAsStateWithLifecycle()
     val focusDurationMinutes by viewModel.focusDurationMinutes.collectAsStateWithLifecycle()
-    val rewardDurationMinutes by viewModel.rewardDurationMinutes.collectAsStateWithLifecycle()
+    val boundQuestId by viewModel.boundQuestId.collectAsStateWithLifecycle()
     val timerPhase by viewModel.timerPhase.collectAsStateWithLifecycle()
     val remainingSeconds by viewModel.remainingSeconds.collectAsStateWithLifecycle()
     val totalPhaseSeconds by viewModel.totalPhaseSeconds.collectAsStateWithLifecycle()
@@ -92,6 +116,8 @@ fun SystemFocusHudApp(
     val sealYoutubeShorts by viewModel.sealYoutubeShorts.collectAsStateWithLifecycle()
     val sealInstagramReels by viewModel.sealInstagramReels.collectAsStateWithLifecycle()
     val blockedPackages by viewModel.blockedPackages.collectAsStateWithLifecycle()
+    val unsealedAppsExpiryMap by viewModel.unsealedAppsExpiryMap.collectAsStateWithLifecycle()
+    val currentTimeMillis by viewModel.currentTimeMillis.collectAsStateWithLifecycle()
     val dailyQuests by viewModel.dailyQuests.collectAsStateWithLifecycle()
     val geminiApiKey by viewModel.geminiApiKey.collectAsStateWithLifecycle()
     val isArbiterEvaluating by viewModel.isArbiterEvaluating.collectAsStateWithLifecycle()
@@ -99,11 +125,21 @@ fun SystemFocusHudApp(
     val activeBanner by viewModel.activeBanner.collectAsStateWithLifecycle()
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
     val isAccessibilityEnabled by viewModel.isAccessibilityServiceEnabled.collectAsStateWithLifecycle()
+    val canDrawOverlays by viewModel.canDrawOverlays.collectAsStateWithLifecycle()
     val installedApps by viewModel.installedApps.collectAsStateWithLifecycle()
     val appSearchQuery by viewModel.appSearchQuery.collectAsStateWithLifecycle()
     val lastBlockedEventDescription by viewModel.lastBlockedEventDescription.collectAsStateWithLifecycle()
 
-    // Return to primary [ STATUS & TIMER ] screen on back press from secondary tabs
+    val openOverlaySettings = {
+        val intent = Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:${context.packageName}")
+        ).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    }
+
     BackHandler(enabled = selectedTab != SystemHudTab.STATUS_TIMER) {
         viewModel.selectTab(SystemHudTab.STATUS_TIMER)
     }
@@ -136,6 +172,9 @@ fun SystemFocusHudApp(
                     ) {
                         PlayerStatusHeaderCard(
                             stats = playerStats,
+                            rewardTokens = rewardTokens,
+                            canDrawOverlays = canDrawOverlays,
+                            onRequestOverlayPermission = openOverlaySettings,
                             activeBanner = activeBanner,
                             onDismissBanner = viewModel::dismissBanner
                         )
@@ -155,8 +194,9 @@ fun SystemFocusHudApp(
                     ) {
                         ActiveTabContent(
                             selectedTab = selectedTab,
+                            rewardTokens = rewardTokens,
                             focusDurationMinutes = focusDurationMinutes,
-                            rewardDurationMinutes = rewardDurationMinutes,
+                            boundQuestId = boundQuestId,
                             timerPhase = timerPhase,
                             remainingSeconds = remainingSeconds,
                             totalPhaseSeconds = totalPhaseSeconds,
@@ -169,9 +209,12 @@ fun SystemFocusHudApp(
                             isArbiterEvaluating = isArbiterEvaluating,
                             latestArbiterVerdict = latestArbiterVerdict,
                             isAccessibilityEnabled = isAccessibilityEnabled,
+                            canDrawOverlays = canDrawOverlays,
                             sealYoutubeShorts = sealYoutubeShorts,
                             sealInstagramReels = sealInstagramReels,
                             blockedPackages = blockedPackages,
+                            unsealedAppsExpiryMap = unsealedAppsExpiryMap,
+                            currentTimeMillis = currentTimeMillis,
                             installedApps = installedApps,
                             appSearchQuery = appSearchQuery,
                             lastBlockedEventDescription = lastBlockedEventDescription,
@@ -186,6 +229,9 @@ fun SystemFocusHudApp(
                 ) {
                     PlayerStatusHeaderCard(
                         stats = playerStats,
+                        rewardTokens = rewardTokens,
+                        canDrawOverlays = canDrawOverlays,
+                        onRequestOverlayPermission = openOverlaySettings,
                         activeBanner = activeBanner,
                         onDismissBanner = viewModel::dismissBanner
                     )
@@ -197,8 +243,9 @@ fun SystemFocusHudApp(
                     ) {
                         ActiveTabContent(
                             selectedTab = selectedTab,
+                            rewardTokens = rewardTokens,
                             focusDurationMinutes = focusDurationMinutes,
-                            rewardDurationMinutes = rewardDurationMinutes,
+                            boundQuestId = boundQuestId,
                             timerPhase = timerPhase,
                             remainingSeconds = remainingSeconds,
                             totalPhaseSeconds = totalPhaseSeconds,
@@ -211,9 +258,12 @@ fun SystemFocusHudApp(
                             isArbiterEvaluating = isArbiterEvaluating,
                             latestArbiterVerdict = latestArbiterVerdict,
                             isAccessibilityEnabled = isAccessibilityEnabled,
+                            canDrawOverlays = canDrawOverlays,
                             sealYoutubeShorts = sealYoutubeShorts,
                             sealInstagramReels = sealInstagramReels,
                             blockedPackages = blockedPackages,
+                            unsealedAppsExpiryMap = unsealedAppsExpiryMap,
+                            currentTimeMillis = currentTimeMillis,
                             installedApps = installedApps,
                             appSearchQuery = appSearchQuery,
                             lastBlockedEventDescription = lastBlockedEventDescription,
@@ -234,8 +284,9 @@ fun SystemFocusHudApp(
 @Composable
 private fun ActiveTabContent(
     selectedTab: SystemHudTab,
+    rewardTokens: Int,
     focusDurationMinutes: Int,
-    rewardDurationMinutes: Int,
+    boundQuestId: String?,
     timerPhase: com.example.data.TimerPhase,
     remainingSeconds: Int,
     totalPhaseSeconds: Int,
@@ -248,9 +299,12 @@ private fun ActiveTabContent(
     isArbiterEvaluating: Boolean,
     latestArbiterVerdict: ArbiterVerdictResult?,
     isAccessibilityEnabled: Boolean,
+    canDrawOverlays: Boolean,
     sealYoutubeShorts: Boolean,
     sealInstagramReels: Boolean,
     blockedPackages: Set<String>,
+    unsealedAppsExpiryMap: Map<String, Long>,
+    currentTimeMillis: Long,
     installedApps: List<com.example.ui.InstalledAppItem>,
     appSearchQuery: String,
     lastBlockedEventDescription: String?,
@@ -260,7 +314,8 @@ private fun ActiveTabContent(
         SystemHudTab.STATUS_TIMER -> {
             StatusTimerScreen(
                 focusDurationMinutes = focusDurationMinutes,
-                rewardDurationMinutes = rewardDurationMinutes,
+                boundQuestId = boundQuestId,
+                activeDailyQuests = dailyQuests,
                 timerPhase = timerPhase,
                 remainingSeconds = remainingSeconds,
                 totalPhaseSeconds = totalPhaseSeconds,
@@ -268,7 +323,7 @@ private fun ActiveTabContent(
                 isBlockingActive = isBlockingActive,
                 completedDungeons = completedDungeons,
                 onSelectFocusDuration = viewModel::selectFocusDuration,
-                onSelectRewardDuration = viewModel::selectRewardDuration,
+                onBindQuestToTimer = viewModel::bindQuestToTimer,
                 onStartOrToggleTimer = viewModel::startOrToggleDungeonTimer,
                 onAbortTimer = viewModel::abortTimer,
                 onInstantClearQuest = viewModel::simulateTimerZeroForInstantClear
@@ -291,6 +346,10 @@ private fun ActiveTabContent(
         SystemHudTab.PENALTY_SEALS -> {
             PenaltySealsScreen(
                 isAccessibilityEnabled = isAccessibilityEnabled,
+                canDrawOverlays = canDrawOverlays,
+                rewardTokens = rewardTokens,
+                unsealedAppsExpiryMap = unsealedAppsExpiryMap,
+                currentTimeMillis = currentTimeMillis,
                 isBlockingActive = isBlockingActive,
                 forceDungeonLockTestMode = forceDungeonLockTestMode,
                 sealYoutubeShorts = sealYoutubeShorts,
@@ -300,6 +359,7 @@ private fun ActiveTabContent(
                 searchQuery = appSearchQuery,
                 lastBlockedEventDescription = lastBlockedEventDescription,
                 onRefreshAccessibilityStatus = viewModel::refreshAccessibilityStatus,
+                onRedeemTokensForApp = viewModel::redeemTokensForApp,
                 onToggleForceDungeonLockTestMode = viewModel::setForceDungeonLockTestMode,
                 onToggleSealYoutubeShorts = viewModel::setSealYoutubeShorts,
                 onToggleSealInstagramReels = viewModel::setSealInstagramReels,

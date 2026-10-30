@@ -1,6 +1,6 @@
 {
-  "summary":  "Updated implementation plan for System Focus HUD Version 1.1, adding the Quota-Safe Single-Request Gemini System Arbiter, supercharged multi-window Accessibility App & Shorts/Reels blocker with Force Dungeon Lock (Test Mode) and penalty Toasts, and the GitHub Actions debug signing fix in app/build.gradle.kts.",
-  "updatedAt":  "2026-10-29T19:21:42.273520255Z",
+  "summary":  "Implementation plan for System Focus HUD Version 1.2, introducing the Dopamine-Tuned Reward Token Economy (5m minimum focus threshold, 35m focus = 100 Tokens = 10m app time, fixed 10m-60m per-app unseal passes), Timer-Quest Binding, WindowManager System Penalty Overlay kick-out (SYSTEM_ALERT_WINDOW), Quest XP exploit reversal, and midnight-reset empty Daily Quests.",
+  "updatedAt":  "2026-10-30T04:53:09.382612969Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
