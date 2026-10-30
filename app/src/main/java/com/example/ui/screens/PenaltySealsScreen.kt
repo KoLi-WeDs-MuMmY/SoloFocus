@@ -78,6 +78,7 @@ import com.example.ui.theme.SystemWindowSurfaceElevated
 fun PenaltySealsScreen(
     isAccessibilityEnabled: Boolean,
     canDrawOverlays: Boolean,
+    hasNotificationPermission: Boolean,
     rewardTokens: Int,
     unsealedAppsExpiryMap: Map<String, Long>,
     currentTimeMillis: Long,
@@ -90,6 +91,8 @@ fun PenaltySealsScreen(
     searchQuery: String,
     lastBlockedEventDescription: String?,
     onRefreshAccessibilityStatus: () -> Unit,
+    onRequestNotificationPermissionAndSendBar: () -> Unit,
+    onOpenPermissionSetupDialog: () -> Unit,
     onRedeemTokensForApp: (String, String, Int) -> Boolean,
     onToggleForceDungeonLockTestMode: (Boolean) -> Unit,
     onToggleSealYoutubeShorts: (Boolean) -> Unit,
@@ -129,20 +132,22 @@ fun PenaltySealsScreen(
         }
     }
 
+    val allAuthoritiesGranted = isAccessibilityEnabled && canDrawOverlays && hasNotificationPermission
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
             .testTag("penalty_seals_list"),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 1. Glowing [ SYSTEM AUTHORITY: ACCESSIBILITY & OVERLAY ] Status Card
+        // 1. Glowing [ SYSTEM AUTHORITY: ACCESSIBILITY, OVERLAY & NOTIFICATIONS ] Status Card
         item {
             SystemWindowCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("system_authority_card"),
-                borderStartColor = if (isAccessibilityEnabled && canDrawOverlays) SystemManaCyan else PenaltyDangerRed,
-                borderEndColor = if (isAccessibilityEnabled && canDrawOverlays) RoyalSystemBlue else MonarchShadowPurple,
+                borderStartColor = if (allAuthoritiesGranted) SystemManaCyan else PenaltyDangerRed,
+                borderEndColor = if (allAuthoritiesGranted) RoyalSystemBlue else MonarchShadowPurple,
                 contentPadding = 16.dp
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -156,20 +161,20 @@ fun PenaltySealsScreen(
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(
-                                imageVector = if (isAccessibilityEnabled && canDrawOverlays) {
+                                imageVector = if (allAuthoritiesGranted) {
                                     Icons.Default.GppGood
                                 } else {
                                     Icons.Default.GppBad
                                 },
                                 contentDescription = "Accessibility Authority Status",
-                                tint = if (isAccessibilityEnabled && canDrawOverlays) SystemManaCyan else PenaltyDangerRed,
+                                tint = if (allAuthoritiesGranted) SystemManaCyan else PenaltyDangerRed,
                                 modifier = Modifier.size(24.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = stringResource(id = R.string.system_authority_header),
                                 style = MaterialTheme.typography.titleMedium,
-                                color = if (isAccessibilityEnabled && canDrawOverlays) SystemManaCyan else PenaltyDangerRed,
+                                color = if (allAuthoritiesGranted) SystemManaCyan else PenaltyDangerRed,
                                 fontWeight = FontWeight.Black
                             )
                         }
@@ -179,20 +184,22 @@ fun PenaltySealsScreen(
 
                     Text(
                         text = buildString {
-                            append("ACCESSIBILITY BLOCKER: ")
-                            append(if (isAccessibilityEnabled) "ONLINE" else "OFFLINE")
-                            append(" • CRIMSON WINDOW OVERLAY: ")
-                            append(if (canDrawOverlays) "ONLINE" else "OFFLINE")
+                            append("NOTIFICATIONS: ")
+                            append(if (hasNotificationPermission) "ONLINE" else "LOCKED")
+                            append(" • OVERLAY: ")
+                            append(if (canDrawOverlays) "ONLINE" else "LOCKED")
+                            append(" • ACCESSIBILITY: ")
+                            append(if (isAccessibilityEnabled) "ONLINE" else "LOCKED")
                         },
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (isAccessibilityEnabled && canDrawOverlays) SystemManaCyan else PenaltyDangerRed,
+                        color = if (allAuthoritiesGranted) SystemManaCyan else PenaltyDangerRed,
                         fontWeight = FontWeight.Black
                     )
 
                     Spacer(modifier = Modifier.height(4.dp))
 
                     Text(
-                        text = "Grants FocusBlockerService authority to intercept sealed apps & Shorts/Reels and draw the 3-second Crimson '[ ! SYSTEM PENALTY: ACCESS DENIED ]' overlay.",
+                        text = "On Android 13+, side-loaded APKs lock Accessibility & Overlay behind 'Restricted settings'. Tap [ 1. NOTIFICATION ACCESS BAR ] and [ 2. UNLOCK RESTRICTED SETTINGS (APP INFO) ] (top-right ⋮ -> 'Allow restricted settings'), then enable Overlay and Accessibility.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = HudTextPrimary
                     )
@@ -210,10 +217,75 @@ fun PenaltySealsScreen(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     SystemHudButton(
-                        text = if (isAccessibilityEnabled) {
-                            "[ ACCESSIBILITY AUTHORITY: ONLINE (SETTINGS) ]"
+                        text = if (hasNotificationPermission) {
+                            "[ 1. SEND PERMISSION ACCESS NOTIFICATION ]"
                         } else {
-                            "[ GRANT ACCESSIBILITY AUTHORITY ]"
+                            "[ 1. GRANT NOTIFICATIONS FOR PERMISSION ACCESS ]"
+                        },
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onRequestNotificationPermissionAndSendBar()
+                        },
+                        primaryColor = if (hasNotificationPermission) SystemManaCyan else SovereignRewardGold,
+                        secondaryColor = RoyalSystemBlue,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("notification_permission_button")
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    SystemHudButton(
+                        text = "[ 2. UNLOCK RESTRICTED SETTINGS (APP INFO ⋮) ]",
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            val intent = Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.parse("package:${context.packageName}")
+                            ).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(intent)
+                        },
+                        primaryColor = MonarchShadowPurple,
+                        secondaryColor = SystemManaCyan,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("unlock_restricted_settings_button")
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    SystemHudButton(
+                        text = if (canDrawOverlays) {
+                            "[ 3. DISPLAY OVER OTHER APPS: ONLINE ]"
+                        } else {
+                            "[ 3. GRANT DISPLAY OVER OTHER APPS ]"
+                        },
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            val intent = Intent(
+                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:${context.packageName}")
+                            ).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(intent)
+                        },
+                        primaryColor = if (canDrawOverlays) SystemManaCyan else SovereignRewardGold,
+                        secondaryColor = MonarchShadowPurple,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("overlay_settings_button")
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    SystemHudButton(
+                        text = if (isAccessibilityEnabled) {
+                            "[ 4. ACCESSIBILITY SERVICE: ONLINE ]"
+                        } else {
+                            "[ 4. GRANT ACCESSIBILITY SERVICE ]"
                         },
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -232,26 +304,16 @@ fun PenaltySealsScreen(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     SystemHudButton(
-                        text = if (canDrawOverlays) {
-                            "[ OVERLAY SYSTEM AUTHORITY: ONLINE ]"
-                        } else {
-                            "[ GRANT OVERLAY SYSTEM AUTHORITY ]"
-                        },
+                        text = "[ OPEN FULL PERMISSION CHECKLIST MODAL ]",
                         onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            val intent = Intent(
-                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                Uri.parse("package:${context.packageName}")
-                            ).apply {
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                            context.startActivity(intent)
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onOpenPermissionSetupDialog()
                         },
-                        primaryColor = if (canDrawOverlays) SystemManaCyan else SovereignRewardGold,
-                        secondaryColor = MonarchShadowPurple,
+                        primaryColor = SystemManaCyan,
+                        secondaryColor = RoyalSystemBlue,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .testTag("overlay_settings_button")
+                            .testTag("open_permission_modal_button")
                     )
                 }
             }

@@ -210,116 +210,125 @@ fun PlayerStatusHeaderCard(
             contentPadding = 14.dp
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
+                // Row 1: Rank Badge & Player Status Title (full horizontal width, never squeezed)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .clip(CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp))
+                            .background(
+                                Brush.linearGradient(
+                                    listOf(
+                                        MonarchShadowPurple.copy(alpha = 0.35f),
+                                        RoyalSystemBlue.copy(alpha = 0.35f)
+                                    )
+                                )
+                            )
+                            .border(
+                                width = 1.dp,
+                                color = SystemManaCyan,
+                                shape = CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp)
+                            )
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = stats.rank.label,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = SystemManaCyan,
+                            fontWeight = FontWeight.Black,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "[ PLAYER STATUS ]",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = HudTextSecondary,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "LV.${stats.level} • ${stats.rank.title}",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = HudTextPrimary,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Row 2: Reward Token Vault Badge & Streak Badge
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .clip(CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp))
+                            .background(AbyssalBackground.copy(alpha = 0.9f))
+                            .border(
+                                width = 1.dp,
+                                color = SovereignRewardGold,
+                                shape = CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp)
+                            )
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                            .testTag("header_reward_tokens_badge")
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .clip(CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp))
-                                .background(
-                                    Brush.linearGradient(
-                                        listOf(
-                                            MonarchShadowPurple.copy(alpha = 0.35f),
-                                            RoyalSystemBlue.copy(alpha = 0.35f)
-                                        )
-                                    )
-                                )
-                                .border(
-                                    width = 1.dp,
-                                    color = SystemManaCyan,
-                                    shape = CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp)
-                                )
-                                .padding(horizontal = 10.dp, vertical = 4.dp)
-                        ) {
-                            Text(
-                                text = stats.rank.label,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = SystemManaCyan,
-                                fontWeight = FontWeight.Black
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                text = "[ PLAYER STATUS ]",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = HudTextSecondary
-                            )
-                            Text(
-                                text = "LV.${stats.level} • ${stats.rank.title}",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = HudTextPrimary,
-                                fontWeight = FontWeight.ExtraBold
-                            )
-                        }
+                        Icon(
+                            imageVector = Icons.Default.Token,
+                            contentDescription = "Reward Tokens",
+                            tint = SovereignRewardGold,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "$rewardTokens TOKENS",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SovereignRewardGold,
+                            fontWeight = FontWeight.Black,
+                            maxLines = 1,
+                            softWrap = false
+                        )
                     }
 
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        modifier = Modifier
+                            .clip(CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp))
+                            .background(AbyssalBackground.copy(alpha = 0.8f))
+                            .border(
+                                width = 1.dp,
+                                color = SystemManaCyan.copy(alpha = 0.7f),
+                                shape = CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp)
+                            )
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
-                        // Reward Token Vault Badge
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clip(CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp))
-                                .background(AbyssalBackground.copy(alpha = 0.9f))
-                                .border(
-                                    width = 1.dp,
-                                    color = SovereignRewardGold,
-                                    shape = CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp)
-                                )
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                                .testTag("header_reward_tokens_badge")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Token,
-                                contentDescription = "Reward Tokens",
-                                tint = SovereignRewardGold,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "$rewardTokens TOKENS",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = SovereignRewardGold,
-                                fontWeight = FontWeight.Black
-                            )
-                        }
-
-                        // Streak Badge
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clip(CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp))
-                                .background(AbyssalBackground.copy(alpha = 0.8f))
-                                .border(
-                                    width = 1.dp,
-                                    color = SystemManaCyan.copy(alpha = 0.7f),
-                                    shape = CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp)
-                                )
-                                .padding(horizontal = 7.dp, vertical = 4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.LocalFireDepartment,
-                                contentDescription = "Streak Days",
-                                tint = SystemManaCyan,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = "${stats.streakDays}D",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = SystemManaCyan,
-                                fontWeight = FontWeight.Black
-                            )
-                        }
+                        Icon(
+                            imageVector = Icons.Default.LocalFireDepartment,
+                            contentDescription = "Streak Days",
+                            tint = SystemManaCyan,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "${stats.streakDays}D STREAK",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SystemManaCyan,
+                            fontWeight = FontWeight.Black,
+                            maxLines = 1,
+                            softWrap = false
+                        )
                     }
                 }
 
@@ -334,13 +343,17 @@ fun PlayerStatusHeaderCard(
                     Text(
                         text = "MANA / EXP GAUGE",
                         style = MaterialTheme.typography.labelSmall,
-                        color = SystemManaCyan
+                        color = SystemManaCyan,
+                        maxLines = 1,
+                        softWrap = false
                     )
                     Text(
                         text = "${stats.currentXp} / ${stats.xpToNextLevel} XP",
                         style = MaterialTheme.typography.labelSmall,
                         color = MonarchShadowPurple,
-                        fontWeight = FontWeight.ExtraBold
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
 

@@ -1,13 +1,17 @@
 package com.example
 
+import android.Manifest
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -36,7 +40,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -46,7 +54,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -58,6 +68,7 @@ import com.example.ui.FocusViewModel
 import com.example.ui.SystemHudTab
 import com.example.ui.components.PlayerStatusHeaderCard
 import com.example.ui.components.SystemBackgroundScanlines
+import com.example.ui.components.SystemHudButton
 import com.example.ui.components.SystemWindowCard
 import com.example.ui.screens.DailyQuestsScreen
 import com.example.ui.screens.PenaltySealsScreen
@@ -65,9 +76,11 @@ import com.example.ui.screens.StatusTimerScreen
 import com.example.ui.theme.AbyssalBackground
 import com.example.ui.theme.HudTextPrimary
 import com.example.ui.theme.HudTextSecondary
+import com.example.ui.theme.MonarchShadowPurple
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.PenaltyDangerRed
 import com.example.ui.theme.RoyalSystemBlue
+import com.example.ui.theme.SovereignRewardGold
 import com.example.ui.theme.SystemManaCyan
 import com.example.ui.theme.SystemWindowSurface
 
@@ -90,18 +103,6 @@ fun SystemFocusHudApp(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                viewModel.refreshAccessibilityStatus()
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
-    }
 
     val playerStats by viewModel.playerStats.collectAsStateWithLifecycle()
     val rewardTokens by viewModel.rewardTokens.collectAsStateWithLifecycle()
@@ -126,18 +127,93 @@ fun SystemFocusHudApp(
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
     val isAccessibilityEnabled by viewModel.isAccessibilityServiceEnabled.collectAsStateWithLifecycle()
     val canDrawOverlays by viewModel.canDrawOverlays.collectAsStateWithLifecycle()
+    val hasNotificationPermission by viewModel.hasNotificationPermission.collectAsStateWithLifecycle()
     val installedApps by viewModel.installedApps.collectAsStateWithLifecycle()
     val appSearchQuery by viewModel.appSearchQuery.collectAsStateWithLifecycle()
     val lastBlockedEventDescription by viewModel.lastBlockedEventDescription.collectAsStateWithLifecycle()
 
-    val openOverlaySettings = {
-        val intent = Intent(
-            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-            Uri.parse("package:${context.packageName}")
-        ).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    var hasDismissedStartupPermissionModal by rememberSaveable { mutableStateOf(false) }
+    var forceShowPermissionModal by rememberSaveable { mutableStateOf(false) }
+
+    // Runtime permission launcher for Android 13+ POST_NOTIFICATIONS
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        viewModel.refreshAccessibilityStatus()
+        viewModel.sendPermissionAccessNotificationNow()
+    }
+
+    val requestNotificationsAndPostAccessBar = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else if (!hasNotificationPermission) {
+            val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } else {
+            viewModel.sendPermissionAccessNotificationNow()
         }
-        context.startActivity(intent)
+    }
+
+    // Automatically request POST_NOTIFICATIONS on first launch so the System can post the
+    // permission access notification bar
+    LaunchedEffect(Unit) {
+        viewModel.refreshAccessibilityStatus()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshAccessibilityStatus()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    val missingAnyPermission = !isAccessibilityEnabled || !canDrawOverlays || !hasNotificationPermission
+    if ((missingAnyPermission && !hasDismissedStartupPermissionModal) || forceShowPermissionModal) {
+        SystemPermissionSetupDialog(
+            hasNotificationPermission = hasNotificationPermission,
+            canDrawOverlays = canDrawOverlays,
+            isAccessibilityEnabled = isAccessibilityEnabled,
+            onRequestNotificationPermission = requestNotificationsAndPostAccessBar,
+            onOpenAppInfoRestrictedSettings = {
+                val intent = Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:${context.packageName}")
+                ).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+            },
+            onOpenOverlaySettings = {
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:${context.packageName}")
+                ).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+            },
+            onOpenAccessibilitySettings = {
+                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+            },
+            onDismiss = {
+                hasDismissedStartupPermissionModal = true
+                forceShowPermissionModal = false
+            }
+        )
     }
 
     BackHandler(enabled = selectedTab != SystemHudTab.STATUS_TIMER) {
@@ -173,8 +249,8 @@ fun SystemFocusHudApp(
                         PlayerStatusHeaderCard(
                             stats = playerStats,
                             rewardTokens = rewardTokens,
-                            canDrawOverlays = canDrawOverlays,
-                            onRequestOverlayPermission = openOverlaySettings,
+                            canDrawOverlays = canDrawOverlays && isAccessibilityEnabled,
+                            onRequestOverlayPermission = { forceShowPermissionModal = true },
                             activeBanner = activeBanner,
                             onDismissBanner = viewModel::dismissBanner
                         )
@@ -210,6 +286,7 @@ fun SystemFocusHudApp(
                             latestArbiterVerdict = latestArbiterVerdict,
                             isAccessibilityEnabled = isAccessibilityEnabled,
                             canDrawOverlays = canDrawOverlays,
+                            hasNotificationPermission = hasNotificationPermission,
                             sealYoutubeShorts = sealYoutubeShorts,
                             sealInstagramReels = sealInstagramReels,
                             blockedPackages = blockedPackages,
@@ -218,6 +295,8 @@ fun SystemFocusHudApp(
                             installedApps = installedApps,
                             appSearchQuery = appSearchQuery,
                             lastBlockedEventDescription = lastBlockedEventDescription,
+                            onRequestNotificationPermissionAndSendBar = requestNotificationsAndPostAccessBar,
+                            onOpenPermissionSetupDialog = { forceShowPermissionModal = true },
                             viewModel = viewModel
                         )
                     }
@@ -230,8 +309,8 @@ fun SystemFocusHudApp(
                     PlayerStatusHeaderCard(
                         stats = playerStats,
                         rewardTokens = rewardTokens,
-                        canDrawOverlays = canDrawOverlays,
-                        onRequestOverlayPermission = openOverlaySettings,
+                        canDrawOverlays = canDrawOverlays && isAccessibilityEnabled,
+                        onRequestOverlayPermission = { forceShowPermissionModal = true },
                         activeBanner = activeBanner,
                         onDismissBanner = viewModel::dismissBanner
                     )
@@ -259,6 +338,7 @@ fun SystemFocusHudApp(
                             latestArbiterVerdict = latestArbiterVerdict,
                             isAccessibilityEnabled = isAccessibilityEnabled,
                             canDrawOverlays = canDrawOverlays,
+                            hasNotificationPermission = hasNotificationPermission,
                             sealYoutubeShorts = sealYoutubeShorts,
                             sealInstagramReels = sealInstagramReels,
                             blockedPackages = blockedPackages,
@@ -267,6 +347,8 @@ fun SystemFocusHudApp(
                             installedApps = installedApps,
                             appSearchQuery = appSearchQuery,
                             lastBlockedEventDescription = lastBlockedEventDescription,
+                            onRequestNotificationPermissionAndSendBar = requestNotificationsAndPostAccessBar,
+                            onOpenPermissionSetupDialog = { forceShowPermissionModal = true },
                             viewModel = viewModel
                         )
                     }
@@ -276,6 +358,104 @@ fun SystemFocusHudApp(
                         onSelectTab = viewModel::selectTab
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SystemPermissionSetupDialog(
+    hasNotificationPermission: Boolean,
+    canDrawOverlays: Boolean,
+    isAccessibilityEnabled: Boolean,
+    onRequestNotificationPermission: () -> Unit,
+    onOpenAppInfoRestrictedSettings: () -> Unit,
+    onOpenOverlaySettings: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        SystemWindowCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("system_permission_setup_dialog"),
+            borderStartColor = PenaltyDangerRed,
+            borderEndColor = SystemManaCyan,
+            surfaceColor = AbyssalBackground.copy(alpha = 0.98f),
+            contentPadding = 18.dp
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "[ ! SYSTEM AUTHORITY SETUP ]",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = PenaltyDangerRed,
+                    fontWeight = FontWeight.Black
+                )
+
+                Text(
+                    text = "Grant Display Over Other Apps, Accessibility, and Notification Access. If Android locks Accessibility/Overlay ('Restricted setting'), unlock it via Step 2 or from the Notification Shade:",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = HudTextPrimary
+                )
+
+                SystemHudButton(
+                    text = if (hasNotificationPermission) {
+                        "[ 1. NOTIFICATIONS: ONLINE (SEND ACCESS BAR) ]"
+                    } else {
+                        "[ 1. ALLOW NOTIFICATIONS (FOR ACCESS BAR) ]"
+                    },
+                    onClick = onRequestNotificationPermission,
+                    primaryColor = if (hasNotificationPermission) SystemManaCyan else SovereignRewardGold,
+                    secondaryColor = RoyalSystemBlue,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                SystemHudButton(
+                    text = "[ 2. UNLOCK LOCKED PERMISSIONS (APP INFO ⋮) ]",
+                    onClick = onOpenAppInfoRestrictedSettings,
+                    primaryColor = MonarchShadowPurple,
+                    secondaryColor = SystemManaCyan,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                SystemHudButton(
+                    text = if (canDrawOverlays) {
+                        "[ 3. DISPLAY OVER OTHER APPS: ONLINE ]"
+                    } else {
+                        "[ 3. GRANT DISPLAY OVER OTHER APPS ]"
+                    },
+                    onClick = onOpenOverlaySettings,
+                    primaryColor = if (canDrawOverlays) SystemManaCyan else SovereignRewardGold,
+                    secondaryColor = MonarchShadowPurple,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                SystemHudButton(
+                    text = if (isAccessibilityEnabled) {
+                        "[ 4. ACCESSIBILITY BLOCKER: ONLINE ]"
+                    } else {
+                        "[ 4. GRANT ACCESSIBILITY SERVICE ]"
+                    },
+                    onClick = onOpenAccessibilitySettings,
+                    primaryColor = if (isAccessibilityEnabled) SystemManaCyan else PenaltyDangerRed,
+                    secondaryColor = RoyalSystemBlue,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(2.dp))
+
+                SystemHudButton(
+                    text = "[ CONTINUE TO SYSTEM HUD ]",
+                    onClick = onDismiss,
+                    primaryColor = SystemManaCyan,
+                    secondaryColor = RoyalSystemBlue,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("dismiss_permission_modal_button")
+                )
             }
         }
     }
@@ -300,6 +480,7 @@ private fun ActiveTabContent(
     latestArbiterVerdict: ArbiterVerdictResult?,
     isAccessibilityEnabled: Boolean,
     canDrawOverlays: Boolean,
+    hasNotificationPermission: Boolean,
     sealYoutubeShorts: Boolean,
     sealInstagramReels: Boolean,
     blockedPackages: Set<String>,
@@ -308,6 +489,8 @@ private fun ActiveTabContent(
     installedApps: List<com.example.ui.InstalledAppItem>,
     appSearchQuery: String,
     lastBlockedEventDescription: String?,
+    onRequestNotificationPermissionAndSendBar: () -> Unit,
+    onOpenPermissionSetupDialog: () -> Unit,
     viewModel: FocusViewModel
 ) {
     when (selectedTab) {
@@ -347,6 +530,7 @@ private fun ActiveTabContent(
             PenaltySealsScreen(
                 isAccessibilityEnabled = isAccessibilityEnabled,
                 canDrawOverlays = canDrawOverlays,
+                hasNotificationPermission = hasNotificationPermission,
                 rewardTokens = rewardTokens,
                 unsealedAppsExpiryMap = unsealedAppsExpiryMap,
                 currentTimeMillis = currentTimeMillis,
@@ -359,6 +543,8 @@ private fun ActiveTabContent(
                 searchQuery = appSearchQuery,
                 lastBlockedEventDescription = lastBlockedEventDescription,
                 onRefreshAccessibilityStatus = viewModel::refreshAccessibilityStatus,
+                onRequestNotificationPermissionAndSendBar = onRequestNotificationPermissionAndSendBar,
+                onOpenPermissionSetupDialog = onOpenPermissionSetupDialog,
                 onRedeemTokensForApp = viewModel::redeemTokensForApp,
                 onToggleForceDungeonLockTestMode = viewModel::setForceDungeonLockTestMode,
                 onToggleSealYoutubeShorts = viewModel::setSealYoutubeShorts,
@@ -471,7 +657,10 @@ private fun SystemConsoleSideRail(
                 text = "[ HUNTER COMMAND CONSOLE ]",
                 style = MaterialTheme.typography.labelLarge,
                 color = SystemManaCyan,
-                fontWeight = FontWeight.Black
+                fontWeight = FontWeight.Black,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis
             )
 
             SystemHudTab.entries.forEach { tab ->
@@ -518,7 +707,10 @@ private fun SystemConsoleSideRail(
                         text = tab.title,
                         style = MaterialTheme.typography.titleMedium,
                         color = if (isSelected) SystemManaCyan else HudTextPrimary,
-                        fontWeight = if (isSelected) FontWeight.Black else FontWeight.Bold
+                        fontWeight = if (isSelected) FontWeight.Black else FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -532,7 +724,10 @@ private fun SystemConsoleSideRail(
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = if (isBlockingActive) PenaltyDangerRed else SystemManaCyan,
-                fontWeight = FontWeight.Black
+                fontWeight = FontWeight.Black,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }

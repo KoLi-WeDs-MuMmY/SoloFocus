@@ -1,6 +1,7 @@
 package com.example.service
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -35,54 +36,81 @@ class FocusBlockerService : AccessibilityService() {
         super.onServiceConnected()
         FocusRepository.init(applicationContext)
         cachedHomePackage = resolveDefaultHomeLauncherPackage()
+
+        // Explicitly configure AccessibilityServiceInfo at runtime with packageNames = null
+        // so TYPE_WINDOW_STATE_CHANGED and TYPE_WINDOW_CONTENT_CHANGED fire across ALL OS apps
+        try {
+            val info = serviceInfo ?: AccessibilityServiceInfo()
+            info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
+                AccessibilityEvent.TYPE_WINDOWS_CHANGED or
+                AccessibilityEvent.TYPE_VIEW_SCROLLED
+            info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+            info.flags = AccessibilityServiceInfo.DEFAULT or
+                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
+                AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+            info.notificationTimeout = 50L
+            info.packageNames = null // Listen globally across all installed packages
+            serviceInfo = info
+        } catch (_: Exception) {
+            // Fallback to XML metadata configuration if OEM restricts runtime setServiceInfo
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null) return
+
         // Ensure live SharedPreferences and StateFlow sync even if main UI is closed
         FocusRepository.init(applicationContext)
 
-        val eventPackage = event?.packageName?.toString()
-            ?: rootInActiveWindow?.packageName?.toString()
-            ?: return
-
-        val homePkg = cachedHomePackage ?: resolveDefaultHomeLauncherPackage().also {
-            cachedHomePackage = it
-        }
-
-        // Never block our own app, System UI, Settings, or the default Home Launcher
-        if (eventPackage == applicationContext.packageName ||
-            eventPackage == "com.android.systemui" ||
-            eventPackage == "com.android.settings" ||
-            (homePkg != null && eventPackage == homePkg)
-        ) {
-            return
-        }
-
         val now = System.currentTimeMillis()
-        // 800ms cooldown debounce check so performGlobalAction does not spam-loop
+        // 800ms debounce check so performGlobalAction does not spam-loop
         if (now - lastBlockActionTime < 800L) {
             return
         }
 
-        // Check if this specific app package has been temporarily unsealed via Reward Tokens!
-        if (FocusRepository.isPackageTemporarilyUnsealed(eventPackage, now)) {
+        val eventPkg = event.packageName?.toString()?.takeIf { it.isNotBlank() }
+        val activeWindowPkg = try {
+            rootInActiveWindow?.packageName?.toString()?.takeIf { it.isNotBlank() }
+        } catch (_: Exception) {
+            null
+        }
+
+        val targetPackage = eventPkg ?: activeWindowPkg ?: return
+
+        // Never block our own app, System UI, Settings, or the default Home Launcher
+        if (isExemptSystemOrSelfPackage(targetPackage)) {
             return
         }
 
         val isBlockingActive = FocusRepository.isBlockingActive.value
         val blockedPackages = FocusRepository.blockedPackages.value
 
-        // 1. REAL APP BLOCKING: Kick user Home and show 3-second Crimson WindowManager Penalty Overlay
-        if (isBlockingActive && blockedPackages.contains(eventPackage)) {
-            lastBlockActionTime = now
-            FocusRepository.recordBlockedInterception("Sealed App Blocked: $eventPackage")
-            performGlobalAction(GLOBAL_ACTION_HOME)
-            triggerSystemPenaltyOverlayOrToast(
-                headerTitle = "[ ! SYSTEM PENALTY: ACCESS DENIED ]",
-                subtitle = "[ ! SYSTEM PENALTY: DUNGEON LOCK ACTIVE ]",
-                detail = "TARGET SEALED: $eventPackage\nComplete Focus Dungeons to earn Reward Tokens and unseal this application."
-            )
-            return
+        // 1. FAST-PATH APP BLOCKING ON TYPE_WINDOW_STATE_CHANGED OR ANY FOREIGN PACKAGE EVENT:
+        // Immediately inspect event.packageName and activeWindowPkg without waiting for node traversal!
+        if (isBlockingActive) {
+            val candidatePackages = listOfNotNull(eventPkg, activeWindowPkg).distinct()
+            for (pkg in candidatePackages) {
+                if (!isExemptSystemOrSelfPackage(pkg) &&
+                    blockedPackages.contains(pkg) &&
+                    !FocusRepository.isPackageTemporarilyUnsealed(pkg, now)
+                ) {
+                    lastBlockActionTime = now
+                    FocusRepository.recordBlockedInterception(
+                        "Sealed App Blocked (${
+                            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) "WINDOW_STATE" else "ACTIVE_WINDOW"
+                        }): $pkg"
+                    )
+                    performGlobalAction(GLOBAL_ACTION_HOME)
+                    triggerSystemPenaltyOverlayOrToast(
+                        headerTitle = "[ ! SYSTEM PENALTY: ACCESS DENIED ]",
+                        subtitle = "[ ! SYSTEM PENALTY: DUNGEON LOCK ACTIVE ]",
+                        detail = "TARGET SEALED: $pkg\nComplete Focus Dungeons to earn Reward Tokens and unseal this application."
+                    )
+                    return
+                }
+            }
         }
 
         // 2. REAL SHORTS & REELS BLOCKING (Multi-Window & Multi-Signal Node Scanner)
@@ -97,7 +125,7 @@ class FocusBlockerService : AccessibilityService() {
         if (rootNodes.isEmpty()) return
 
         for (rootNode in rootNodes) {
-            val nodePkg = rootNode.packageName?.toString() ?: eventPackage
+            val nodePkg = rootNode.packageName?.toString()?.takeIf { it.isNotBlank() } ?: targetPackage
 
             // Respect per-app Token unseal if the user explicitly unsealed YouTube or Instagram
             if (FocusRepository.isPackageTemporarilyUnsealed(nodePkg, now)) {
@@ -107,7 +135,11 @@ class FocusBlockerService : AccessibilityService() {
             if (sealShorts && isYoutubeShortsDetected(nodePkg, rootNode)) {
                 lastBlockActionTime = now
                 FocusRepository.recordBlockedInterception("YouTube Shorts Sealed -> Kick-Out")
-                performGlobalAction(GLOBAL_ACTION_BACK)
+                if (isBlockingActive && blockedPackages.contains(nodePkg)) {
+                    performGlobalAction(GLOBAL_ACTION_HOME)
+                } else {
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                }
                 triggerSystemPenaltyOverlayOrToast(
                     headerTitle = "[ ! SYSTEM PENALTY: ACCESS DENIED ]",
                     subtitle = "[ ! SYSTEM PENALTY: DUNGEON LOCK ACTIVE ]",
@@ -119,7 +151,11 @@ class FocusBlockerService : AccessibilityService() {
             if (sealReels && isInstagramReelsDetected(nodePkg, rootNode)) {
                 lastBlockActionTime = now
                 FocusRepository.recordBlockedInterception("Instagram Reels Sealed -> Kick-Out")
-                performGlobalAction(GLOBAL_ACTION_BACK)
+                if (isBlockingActive && blockedPackages.contains(nodePkg)) {
+                    performGlobalAction(GLOBAL_ACTION_HOME)
+                } else {
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                }
                 triggerSystemPenaltyOverlayOrToast(
                     headerTitle = "[ ! SYSTEM PENALTY: ACCESS DENIED ]",
                     subtitle = "[ ! SYSTEM PENALTY: DUNGEON LOCK ACTIVE ]",
@@ -130,17 +166,30 @@ class FocusBlockerService : AccessibilityService() {
         }
     }
 
-    /**
-     * Uses WindowManager (SYSTEM_ALERT_WINDOW / TYPE_APPLICATION_OVERLAY) to draw a full-screen,
-     * un-dismissible Crimson Red Solo Leveling warning overlay for 3 seconds (2.5-3s) to
-     * aggressively kick the user out of the distraction. Falls back to Toast if permission is missing.
-     */
+    private fun isExemptSystemOrSelfPackage(pkg: String): Boolean {
+        val homePkg = cachedHomePackage ?: resolveDefaultHomeLauncherPackage().also {
+            cachedHomePackage = it
+        }
+        return pkg == applicationContext.packageName ||
+            pkg == "com.android.systemui" ||
+            pkg == "com.android.settings" ||
+            pkg.contains("inputmethod", ignoreCase = true) ||
+            pkg.contains("permissioncontroller", ignoreCase = true) ||
+            (homePkg != null && pkg == homePkg)
+    }
+
     private fun triggerSystemPenaltyOverlayOrToast(
         headerTitle: String,
         subtitle: String,
         detail: String
     ) {
         mainHandler.post {
+            com.example.util.SystemAuthorityNotificationHelper.postPenaltyAlertNotification(
+                context = applicationContext,
+                title = headerTitle,
+                detail = detail
+            )
+
             val canOverlay = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 Settings.canDrawOverlays(applicationContext)
             } else {
@@ -250,7 +299,6 @@ class FocusBlockerService : AccessibilityService() {
                 wm.addView(overlayContainer, params)
                 activePenaltyOverlayView = overlayContainer
                 mainHandler.removeCallbacks(dismissOverlayRunnable)
-                // Keep the full-screen Crimson Penalty Overlay visible for 2.8 seconds (2.5-3s)
                 mainHandler.postDelayed(dismissOverlayRunnable, 2800L)
             } catch (_: Exception) {
                 Toast.makeText(
@@ -275,11 +323,17 @@ class FocusBlockerService : AccessibilityService() {
 
     private fun collectActiveRootNodes(event: AccessibilityEvent?): List<AccessibilityNodeInfo> {
         val nodes = mutableListOf<AccessibilityNodeInfo>()
-        rootInActiveWindow?.let { nodes.add(it) }
-        event?.source?.let { src ->
-            if (nodes.none { it == src }) {
-                nodes.add(src)
+        try {
+            rootInActiveWindow?.let { nodes.add(it) }
+        } catch (_: Exception) {
+        }
+        try {
+            event?.source?.let { src ->
+                if (nodes.none { it == src }) {
+                    nodes.add(src)
+                }
             }
+        } catch (_: Exception) {
         }
         try {
             windows?.forEach { windowInfo ->
@@ -289,7 +343,6 @@ class FocusBlockerService : AccessibilityService() {
                 }
             }
         } catch (_: Exception) {
-            // Ignore if windows list is unavailable on specific OEM builds
         }
         return nodes
     }
@@ -304,7 +357,14 @@ class FocusBlockerService : AccessibilityService() {
 
         return scanNodeTreeForSignals(
             node = root,
-            viewIdSignals = listOf("reel_player", "shorts_", "reel_recycler", "reel_watch"),
+            viewIdSignals = listOf(
+                "reel_player",
+                "shorts_",
+                "reel_recycler",
+                "reel_watch",
+                "reel_progress",
+                "reel_multi_format"
+            ),
             selectedTabLabels = listOf("Shorts")
         )
     }
@@ -319,7 +379,13 @@ class FocusBlockerService : AccessibilityService() {
 
         return scanNodeTreeForSignals(
             node = root,
-            viewIdSignals = listOf("clips_viewer", "reel_viewer", "clips_video", "clips_swipe"),
+            viewIdSignals = listOf(
+                "clips_viewer",
+                "reel_viewer",
+                "clips_video",
+                "clips_swipe",
+                "clips_item"
+            ),
             selectedTabLabels = listOf("Reels")
         )
     }
@@ -330,31 +396,34 @@ class FocusBlockerService : AccessibilityService() {
         selectedTabLabels: List<String>,
         depth: Int = 0
     ): Boolean {
-        if (node == null || depth > 22) return false
+        if (node == null || depth > 24) return false
 
-        if (node.isVisibleToUser) {
-            val viewId = node.viewIdResourceName.orEmpty().lowercase()
-            if (viewId.isNotEmpty() && viewIdSignals.any { signal -> viewId.contains(signal) }) {
-                return true
-            }
+        val viewId = node.viewIdResourceName.orEmpty().lowercase()
+        if (viewId.isNotEmpty() && viewIdSignals.any { signal -> viewId.contains(signal) }) {
+            return true
+        }
 
-            val textStr = node.text?.toString()?.trim().orEmpty()
-            val descStr = node.contentDescription?.toString()?.trim().orEmpty()
+        val textStr = node.text?.toString()?.trim().orEmpty()
+        val descStr = node.contentDescription?.toString()?.trim().orEmpty()
 
-            if (node.isSelected) {
-                for (tabLabel in selectedTabLabels) {
-                    if (textStr.equals(tabLabel, ignoreCase = true) ||
-                        descStr.equals(tabLabel, ignoreCase = true)
-                    ) {
-                        return true
-                    }
+        if (node.isSelected) {
+            for (tabLabel in selectedTabLabels) {
+                if (textStr.equals(tabLabel, ignoreCase = true) ||
+                    descStr.equals(tabLabel, ignoreCase = true) ||
+                    descStr.startsWith("$tabLabel,", ignoreCase = true)
+                ) {
+                    return true
                 }
             }
         }
 
         val childCount = node.childCount
         for (i in 0 until childCount) {
-            val child = node.getChild(i) ?: continue
+            val child = try {
+                node.getChild(i)
+            } catch (_: Exception) {
+                null
+            } ?: continue
             if (scanNodeTreeForSignals(child, viewIdSignals, selectedTabLabels, depth + 1)) {
                 return true
             }

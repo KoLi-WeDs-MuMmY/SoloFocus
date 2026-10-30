@@ -16,8 +16,8 @@ import com.example.data.SystemAlertBanner
 import com.example.data.SystemArbiterClient
 import com.example.data.TimerPhase
 import com.example.service.FocusBlockerService
+import com.example.util.SystemAuthorityNotificationHelper
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,6 +41,7 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         FocusRepository.init(application)
+        SystemAuthorityNotificationHelper.ensureChannelCreated(application)
     }
 
     val playerStats: StateFlow<PlayerStatsState> = FocusRepository.playerStats
@@ -71,6 +72,9 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
     private val _canDrawOverlays = MutableStateFlow(true)
     val canDrawOverlays: StateFlow<Boolean> = _canDrawOverlays.asStateFlow()
 
+    private val _hasNotificationPermission = MutableStateFlow(true)
+    val hasNotificationPermission: StateFlow<Boolean> = _hasNotificationPermission.asStateFlow()
+
     private val _currentTimeMillis = MutableStateFlow(System.currentTimeMillis())
     val currentTimeMillis: StateFlow<Long> = _currentTimeMillis.asStateFlow()
 
@@ -85,8 +89,6 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _latestArbiterVerdict = MutableStateFlow<ArbiterVerdictResult?>(null)
     val latestArbiterVerdict: StateFlow<ArbiterVerdictResult?> = _latestArbiterVerdict.asStateFlow()
-
-    private var timerJob: Job? = null
 
     private val curatedFallbackTargets = listOf(
         InstalledAppItem("com.google.android.youtube", "YouTube", isPresetTarget = true),
@@ -214,12 +216,39 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         FocusRepository.dismissBanner()
     }
 
+    fun sendPermissionAccessNotificationNow() {
+        val context = getApplication<Application>()
+        refreshAccessibilityStatus()
+        SystemAuthorityNotificationHelper.postPermissionAccessNotification(
+            context = context,
+            isAccessibilityEnabled = _isAccessibilityServiceEnabled.value,
+            canDrawOverlays = _canDrawOverlays.value
+        )
+    }
+
     fun refreshAccessibilityStatus() {
         val context = getApplication<Application>()
         FocusRepository.init(context)
-        _isAccessibilityServiceEnabled.value = checkAccessibilityEnabled(context)
-        _canDrawOverlays.value = checkOverlayPermissionEnabled(context)
+        val a11yEnabled = checkAccessibilityEnabled(context)
+        val overlayEnabled = checkOverlayPermissionEnabled(context)
+        val notifEnabled = SystemAuthorityNotificationHelper.hasNotificationPermission(context)
+
+        _isAccessibilityServiceEnabled.value = a11yEnabled
+        _canDrawOverlays.value = overlayEnabled
+        _hasNotificationPermission.value = notifEnabled
         _currentTimeMillis.value = System.currentTimeMillis()
+
+        if (notifEnabled) {
+            if (!a11yEnabled || !overlayEnabled) {
+                SystemAuthorityNotificationHelper.postPermissionAccessNotification(
+                    context = context,
+                    isAccessibilityEnabled = a11yEnabled,
+                    canDrawOverlays = overlayEnabled
+                )
+            } else {
+                SystemAuthorityNotificationHelper.dismissPermissionNotification(context)
+            }
+        }
     }
 
     private fun checkOverlayPermissionEnabled(context: Context): Boolean {

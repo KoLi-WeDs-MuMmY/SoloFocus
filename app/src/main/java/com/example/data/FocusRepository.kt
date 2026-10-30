@@ -103,6 +103,8 @@ object FocusRepository {
     private var prefs: SharedPreferences? = null
 
     private val defaultBlockedPackages = setOf(
+        "com.google.android.youtube",
+        "com.instagram.android",
         "com.zhiliaoapp.musically",
         "com.ss.android.ugc.trill",
         "com.twitter.android",
